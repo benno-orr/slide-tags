@@ -3,10 +3,12 @@
 slide-tags.py — slide-tags pipeline launcher.
 
 Pulls the sample sheet fresh from Google Sheets on every run (no local CSV).
-Creates one timestamped run directory per experiment odir, then submits jobs:
+Creates one timestamped fork dir per sample under
+  <experiments>/{xid}/slidetags/{xid}[-{x_spl}]_S-{s_dataset}_T-{r_dataset}/{YYYY-MM-DD_HH-MM-SS}
+then submits jobs:
 
-  pair — CB↔SB matching  → {run_dir}/pair/{spl}/df_whitelist.txt  [pair == TRUE]
-  map  — classify + cell_profiles + lfc_sweep → {run_dir}/map/    [map  == TRUE]
+  pair — CB↔SB matching  → {fork}/cell-barcode_coords.csv  [pair == TRUE]
+  map  — map_cells + lfc_sweep → {fork}/cell_coords.csv     [map == TRUE]
 
 When both pair and map are TRUE for a sample, map is submitted with
 --dependency=afterok on the pair job so it waits for the whitelist.
@@ -39,9 +41,25 @@ def pull_sheet():
     return ws.get_all_records()
 
 
+EXPERIMENTS_ROOT = "/n/data1/hms/scrb/chen/lab/bco/experiments"
+
+
 def spl(row):
     x = str(row.get("x_spl", "")).strip()
     return f"{row['xid']}-{x}" if x else str(row["xid"]).strip()
+
+
+def dataset_id(row):
+    """Dataset folder name: {xid}[-{x_spl}]_S-{s_dataset}_T-{r_dataset}."""
+    s_ds = str(row.get("s_dataset", "")).strip()
+    r_ds = str(row.get("r_dataset", "")).strip()
+    return f"{spl(row)}_S-{s_ds}_T-{r_ds}"
+
+
+def dataset_base(row):
+    """Output base for a row: <experiments>/{xid}/slidetags/{dataset_id}."""
+    xid = str(row["xid"]).strip()
+    return os.path.join(EXPERIMENTS_ROOT, xid, "slidetags", dataset_id(row))
 
 
 def is_true(val):
@@ -62,23 +80,38 @@ def sbatch_submit(cmd, dry_run=False):
     return None
 
 
-def find_whitelist(odir, name, pair_txt=""):
-    """Resolve df_whitelist.txt for a map-only run.
+# Pair output basename (legacy runs used df_whitelist.txt; both are accepted).
+WHITELIST_NAMES = ("cell-barcode_coords.csv", "df_whitelist.txt")
 
-    pair_txt is a path to a df_whitelist.txt file (or the directory holding one).
-    Blank falls back to the most recent prior pair run under odir.
+
+def _whitelist_in_dir(d):
+    """First existing whitelist file in directory d (new name preferred)."""
+    for nm in WHITELIST_NAMES:
+        p = os.path.join(d, nm)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def find_whitelist(odir, name, pair_txt=""):
+    """Resolve the pair output (cell-barcode_coords.csv) for a map-only run.
+
+    pair_txt is a path to a whitelist file (.csv/.txt) or the directory holding
+    one. Blank falls back to the most recent prior pair run under odir. Legacy
+    df_whitelist.txt is still accepted.
     """
     if pair_txt:
         # explicit path to a whitelist file (or its directory)
-        if pair_txt.endswith(".txt"):
+        if pair_txt.endswith((".csv", ".txt")):
             return pair_txt
-        return os.path.join(pair_txt, "df_whitelist.txt")
-    hits = sorted(glob.glob(os.path.join(odir, "*", "pair", name, "df_whitelist.txt")))
-    if hits:
-        return hits[-1]
-    # legacy: single df_whitelist.txt placed directly in odir
-    root = os.path.join(odir, "df_whitelist.txt")
-    return root if os.path.exists(root) else None
+        return _whitelist_in_dir(pair_txt) or os.path.join(pair_txt, WHITELIST_NAMES[0])
+    # most recent prior fork dir under the dataset base (output sits in the fork dir)
+    for nm in WHITELIST_NAMES:
+        hits = sorted(glob.glob(os.path.join(odir, "*", nm)))
+        if hits:
+            return hits[-1]
+    # legacy: single whitelist file placed directly in the base
+    return _whitelist_in_dir(odir)
 
 
 def main():
@@ -92,25 +125,24 @@ def main():
     rows = pull_sheet()
     print(f"  {len(rows)} rows\n")
 
-    stamp    = datetime.now().strftime("%y%m%d_%H%M%S")
-    run_dirs = {}   # name → timestamped run dir (one per sample)
+    stamp    = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_dirs = {}   # name → timestamped fork dir (one per sample)
 
     for r in rows:
         name    = spl(r)
-        odir    = str(r["odir"]).strip()
+        ds_base = dataset_base(r)   # <experiments>/{xid}/slidetags/{dataset_id}
         do_pair = is_true(r.get("pair")) and not args.map_only
         do_map  = is_true(r.get("map"))  and not args.pair_only
 
         if not (do_pair or do_map):
             continue
 
-        # Provision one timestamped run dir per sample
+        # Provision one timestamped fork dir per sample; pair + map both write
+        # directly into it (no pair/ or map/ subdirs).
         if name not in run_dirs:
-            rdir = os.path.join(odir, f"{stamp}_{name}")
+            rdir = os.path.join(ds_base, stamp)
             run_dirs[name] = rdir
             if not args.dry_run:
-                os.makedirs(os.path.join(rdir, "pair"), exist_ok=True)
-                os.makedirs(os.path.join(rdir, "map"),  exist_ok=True)
                 os.makedirs(os.path.join(rdir, "logs"), exist_ok=True)
                 print(f"run dir: {rdir}")
         rdir = run_dirs[name]
@@ -119,9 +151,6 @@ def main():
 
         # ── pair ─────────────────────────────────────────────────────────────
         if do_pair:
-            pair_out = os.path.join(rdir, "pair", name)
-            if not args.dry_run:
-                os.makedirs(pair_out, exist_ok=True)
             print(f"pair  {name}")
             cmd = [
                 "sbatch", "-J", f"pair_{name}",
@@ -130,23 +159,27 @@ def main():
                 "-e", os.path.join(rdir, "logs", f"%j_pair_{name}.err"),
                 PAIR_SBATCH,
                 str(r["r1_fastq"]), str(r["r2_fastq"]),
-                str(r["whitelist_tsv"]), pair_out,
+                str(r["whitelist_tsv"]), rdir,
             ]
+            # forward the puck so pair left-joins x/y into cell-barcode_coords.csv
+            pair_puck = str(r.get("puck_csv", "")).strip()
+            if pair_puck:
+                cmd += ["--puck", pair_puck]
             pair_job_id = sbatch_submit(cmd, dry_run=args.dry_run)
 
         # ── map ──────────────────────────────────────────────────────────────
         if do_map:
-            map_out = os.path.join(rdir, "map")
+            map_out = rdir
             puck    = str(r["puck_csv"]).strip()
 
             if do_pair:
                 # whitelist will be written by the pair job above
-                wl = os.path.join(rdir, "pair", name, "df_whitelist.txt")
+                wl = os.path.join(rdir, "cell-barcode_coords.csv")
             else:
                 pair_txt = str(r.get("pair_txt", "")).strip()
-                wl = find_whitelist(odir, name, pair_txt)
+                wl = find_whitelist(ds_base, name, pair_txt)
                 if wl is None:
-                    print(f"map   {name}  SKIP: no df_whitelist.txt under {odir} — run pair first")
+                    print(f"map   {name}  SKIP: no cell-barcode_coords.csv under {ds_base} — run pair first")
                     continue
 
             print(f"map   {name}  wl={wl}")
