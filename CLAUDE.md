@@ -6,13 +6,13 @@ Top-level launcher for CB↔SB matching (pair) and spatial mapping (map).
 
 Stored in Google Sheets — no local CSV. Sheet ID: `1ctXseMOjzDodmE581xLaFzc_dJ5I4svlMGTofDjNRUU`
 
-Schema: `pair, map, xid, x_spl, s_dataset, r_dataset, puck_id, pair_txt, r1_fastq, r2_fastq, whitelist_tsv, puck_csv`
+Schema: `pair, map, xid, x_spl, s_dst, r_dst, puck_id, pair_txt, r1_fastq, r2_fastq, whitelist_tsv, puck_csv, odir`
 
 - `pair` / `map` — `TRUE` = submit this step; `FALSE` = skip.
 - Sample name: `{xid}-{x_spl}` when x_spl is set (e.g. xBO368-1), else `{xid}`.
 - `whitelist_tsv` — CellRanger `barcodes.tsv.gz` (input to pair step).
-- `s_dataset` / `r_dataset` — spatial / RNA dataset ids; used to build the output dataset folder `{xid}[-{x_spl}]_S-{s_dataset}_T-{r_dataset}`.
-- The output base is built from `xid` (no `odir` column): `<experiments>/{xid}/slidetags/{dataset}/`.
+- `s_dst` / `r_dst` — spatial / RNA dataset ids; used to build the output dataset folder `{xid}[-{x_spl}]_S-{s_dst}_T-{r_dst}`.
+- The output base is built from `xid`: `<experiments>/{xid}/slide-tags/{dataset}/`. The `odir` column is carried in the sheet but ignored by the launcher.
 - `pair_txt` — (optional) whitelist source when `pair=FALSE`. A path to a `cell-barcode_coords.csv` file (or its directory; legacy `df_whitelist.txt` also accepted). Blank = auto-select most recent prior pair run under the dataset base.
 
 To sync manually: `python3 sheet_sync.py pull` or `python3 sheet_sync.py push`
@@ -30,7 +30,7 @@ python slide-tags.py --dry-run    # print sbatch commands, do not submit
 ## Output structure
 
 ```
-<experiments>/{xid}/slidetags/{xid}[-{x_spl}]_S-{s_dataset}_T-{r_dataset}/{YYYY-MM-DD_HH-MM-SS}/
+<experiments>/{xid}/slide-tags/{xid}[-{x_spl}]_S-{s_dst}_T-{r_dst}/{YYYY-MM-DD_HH-MM-SS}/
   cell-barcode_coords.csv   (pair: CB↔SB match table + puck x/y; comma-separated)
   cell_coords.csv           (map: final per-cell table; comma-separated)
   {puck_basename}.csv       (copy of puck used)

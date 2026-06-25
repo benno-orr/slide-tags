@@ -4,7 +4,7 @@ slide-tags.py — slide-tags pipeline launcher.
 
 Pulls the sample sheet fresh from Google Sheets on every run (no local CSV).
 Creates one timestamped fork dir per sample under
-  <experiments>/{xid}/slidetags/{xid}[-{x_spl}]_S-{s_dataset}_T-{r_dataset}/{YYYY-MM-DD_HH-MM-SS}
+  <experiments>/{xid}/slide-tags/{xid}[-{x_spl}]_S-{s_dst}_T-{r_dst}/{YYYY-MM-DD_HH-MM-SS}
 then submits jobs:
 
   pair — CB↔SB matching  → {fork}/cell-barcode_coords.csv  [pair == TRUE]
@@ -50,16 +50,16 @@ def spl(row):
 
 
 def dataset_id(row):
-    """Dataset folder name: {xid}[-{x_spl}]_S-{s_dataset}_T-{r_dataset}."""
-    s_ds = str(row.get("s_dataset", "")).strip()
-    r_ds = str(row.get("r_dataset", "")).strip()
+    """Dataset folder name: {xid}[-{x_spl}]_S-{s_dst}_T-{r_dst}."""
+    s_ds = str(row.get("s_dst", "")).strip()
+    r_ds = str(row.get("r_dst", "")).strip()
     return f"{spl(row)}_S-{s_ds}_T-{r_ds}"
 
 
 def dataset_base(row):
-    """Output base for a row: <experiments>/{xid}/slidetags/{dataset_id}."""
+    """Output base for a row: <experiments>/{xid}/slide-tags/{dataset_id}."""
     xid = str(row["xid"]).strip()
-    return os.path.join(EXPERIMENTS_ROOT, xid, "slidetags", dataset_id(row))
+    return os.path.join(EXPERIMENTS_ROOT, xid, "slide-tags", dataset_id(row))
 
 
 def is_true(val):
@@ -130,7 +130,7 @@ def main():
 
     for r in rows:
         name    = spl(r)
-        ds_base = dataset_base(r)   # <experiments>/{xid}/slidetags/{dataset_id}
+        ds_base = dataset_base(r)   # <experiments>/{xid}/slide-tags/{dataset_id}
         do_pair = is_true(r.get("pair")) and not args.map_only
         do_map  = is_true(r.get("map"))  and not args.pair_only
 
