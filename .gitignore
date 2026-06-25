@@ -1,0 +1,10 @@
+# Sub-pipeline working copies (live in benno-orr/tags)
+map/
+pair/
+
+# Local state / scratch
+.slidetags/
+*.bak-*
+*.csv.bak*
+__pycache__/
+*.pyc
