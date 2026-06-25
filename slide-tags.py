@@ -8,7 +8,7 @@ Creates one timestamped fork dir per sample under
 then submits jobs:
 
   pair — CB↔SB matching  → {fork}/cell-barcode_coords.csv  [pair == TRUE]
-  map  — map_cells + lfc_sweep → {fork}/cell_coords.csv     [map == TRUE]
+  map  — map_cells → {fork}/cell_coords.csv     [map == TRUE]
 
 When both pair and map are TRUE for a sample, map is submitted with
 --dependency=afterok on the pair job so it waits for the whitelist.

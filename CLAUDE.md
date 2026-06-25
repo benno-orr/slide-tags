@@ -33,7 +33,6 @@ python slide-tags.py --dry-run    # print sbatch commands, do not submit
 <experiments>/{xid}/slidetags/{xid}[-{x_spl}]_S-{s_dataset}_T-{r_dataset}/{YYYY-MM-DD_HH-MM-SS}/
   cell-barcode_coords.csv   (pair: CB↔SB match table + puck x/y; comma-separated)
   cell_coords.csv           (map: final per-cell table; comma-separated)
-  {spl}_fc_*.png
   {puck_basename}.csv       (copy of puck used)
   pair_whitelist.txt        (path to cell-barcode_coords.csv used)
   logs/%j_pair_{spl}.out / %j_map_{spl}.out
@@ -49,4 +48,4 @@ under the dataset base.
 ## Subdirectories
 
 - `pair/` — CB↔SB matcher (from `tags/`); runs `cb-sb_match_sub.py`
-- `map/`  — classify + cell_profiles + lfc_sweep (from `tags_mapping/`); runs `tags_mapping.sbatch`
+- `map/`  — `map_cells.py` + `cell_fit_metrics.R`; runs `tags_mapping.sbatch`
