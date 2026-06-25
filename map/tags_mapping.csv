@@ -1,0 +1,11 @@
+run,sample,whitelist,puck,out_dir
+FALSE,xBO203,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO203/spatial/260531_225753/xBO203/df_whitelist.txt,/n/data1/hms/scrb/chen/lab/bco/pucks/240510_01_xBO203.csv,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO203/spatial/260531_225753
+FALSE,xBO350,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO350/spatial/df_whitelist.txt,/n/data1/hms/scrb/chen/lab/bco/pucks/250106_16_xBO350.csv,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO350/spatial
+FALSE,xBO351-hg38,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO351/spatial/hg38/df_whitelist.txt,PUCK_UNKNOWN,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO351/spatial/hg38
+FALSE,xBO351-mm10,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO351/spatial/mm10/df_whitelist.txt,PUCK_UNKNOWN,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO351/spatial/mm10
+FALSE,xBO368-1,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO368/spatial/260530_141031/xBO368-1/df_whitelist.txt,/n/data1/hms/scrb/chen/lab/bco/pucks/250109_xBO368_Mm_Hs_merged.csv,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO368/spatial/260530_141031
+FALSE,xBO368-2,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO368/spatial/260530_141031/xBO368-2/df_whitelist.txt,/n/data1/hms/scrb/chen/lab/bco/pucks/250109_xBO368_Mm_Hs_merged.csv,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO368/spatial/260530_141031
+TRUE,xBO180,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO180/spatial/260531_225255/xBO180/df_whitelist.txt,/n/data1/hms/scrb/chen/lab/bco/pucks/240510_03_xBO180.csv,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO180/spatial/260531_225255
+FALSE,xBO285,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO285/spatial/260531_225313/xBO285/df_whitelist.txt,/n/data1/hms/scrb/chen/lab/bco/pucks/250115_18_xBO285.csv,/n/data1/hms/scrb/chen/lab/bco/experiments/xBO285/spatial/260531_225313
+
+
