@@ -183,14 +183,24 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
   r2txt <- function(fit) if (is.null(fit)) "NA"
                          else sprintf("R²=%.3f, n=%d pts ringed", fit$r2, fit$npts)
 
-  g_lin_rank <- add_fit(g0, lin_fit, "darkorange2", "dashed") +
+  # linear-rank panel as two side-by-side views: full (left) + zoom to peaks
+  # 1..zoom_hi (right). The zoom uses its own y-range over the shown ranks.
+  zoom_hi <- min(20, max(d$rank))
+  yr_zoom <- range(d$log_prom[d$rank <= zoom_hi], na.rm = TRUE)
+  lin_base <- function() add_fit(g0, lin_fit, "darkorange2", "dashed") +
     geom_point(data = pk, aes(rank, log_prom), colour = "firebrick", size = 2.4) +
+    labs(y = "log10(prom) [UMI/µm²]", title = NULL) + theme_minimal()
+  g_lin_full <- lin_base() +
     coord_cartesian(xlim = xr, ylim = yr) +
-    labs(x = "peak rank (linear)", y = "log10(prom) [UMI/µm²]", title = NULL,
+    labs(x = "peak rank (linear)",
          subtitle = sprintf("linear-rank lr fit  %s | fc p1=%.2f p2=%.2f | n_regions=%s",
                             r2txt(lin_fit), lr_lfc_lin[1], lr_lfc_lin[2],
-                            ifelse(is.finite(n_reg_lin), as.character(round(n_reg_lin)), "NA"))) +
-    theme_minimal()
+                            ifelse(is.finite(n_reg_lin), as.character(round(n_reg_lin)), "NA")))
+  g_lin_zoom <- lin_base() +
+    coord_cartesian(xlim = c(1, zoom_hi), ylim = yr_zoom) +
+    labs(x = "peak rank (linear)", y = NULL,
+         subtitle = sprintf("zoom: peaks 1-%d", zoom_hi))
+  g_lin_rank <- g_lin_full | g_lin_zoom
 
   g_log_rank <- add_fit(g0, log_fit, "steelblue", "dotted") +
     geom_point(data = pk, aes(rank, log_prom), colour = "firebrick", size = 2.4) +
