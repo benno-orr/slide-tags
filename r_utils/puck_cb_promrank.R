@@ -16,7 +16,9 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
                            gamma_model = c("mixture", "single", "powerlaw"),
                            spline_spar = 0.45,
                            show_regions = TRUE, region_min_prom = 0.05,
-                           region_top_exclude = 3) {
+                           region_top_exclude = 3,
+                           show_linregions = TRUE, linreg_win = 11,
+                           linreg_r2 = 0.97, linreg_min_len = 8) {
   gamma_model <- match.arg(gamma_model)
   row <- .get_cell_row(profiles_df, cell_id, suffix)
   if (is.null(row)) return(ggplot() + ggtitle(paste0(cell_id, " — not in table")))
@@ -164,11 +166,28 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
   bf1 <- num("peak1_bestfit_lr_fc"); bf2 <- num("peak2_bestfit_lr_fc")
   n_reg_lin <- num("linrank_n_regions"); n_reg_log <- num("logrank_n_regions")
 
-  # base scatter (+ optional gamma projection), shared by both panels
-  g0 <- ggplot(d, aes(rank, log_prom)) +
-    geom_point(size = 1.3, colour = "grey40")
-  if (!is.null(gproj))
-    g0 <- g0 + geom_line(data = gproj, colour = "purple", linewidth = 0.8)
+  # roughly-linear regions in each rank space (sliding-window local R²), shaded
+  # green on the matching panel: linrank regions on the linear panels, logrank
+  # regions on the log panel.
+  lr_lin_reg <- lr_log_reg <- NULL
+  if (show_linregions) {
+    lr_lin_reg <- .linear_regions(p, "linrank", linreg_win, linreg_r2, linreg_min_len)
+    lr_log_reg <- .linear_regions(p, "logrank", linreg_win, linreg_r2, linreg_min_len)
+  }
+  shade <- function(g, reg) {
+    if (is.null(reg)) return(g)
+    g + geom_rect(data = reg, inherit.aes = FALSE,
+                  aes(xmin = rank_lo, xmax = rank_hi, ymin = -Inf, ymax = Inf),
+                  fill = "forestgreen", alpha = 0.13)
+  }
+  nreg_txt <- function(reg) if (is.null(reg)) "0" else as.character(nrow(reg))
+
+  # base scatter for a panel: shaded linear regions (behind) -> gamma proj -> pts
+  mk_base <- function(reg) {
+    g <- shade(ggplot(d, aes(rank, log_prom)), reg)
+    if (!is.null(gproj)) g <- g + geom_line(data = gproj, colour = "purple", linewidth = 0.8)
+    g + geom_point(size = 1.3, colour = "grey40")
+  }
 
   # add one lr fit (+ its used-points ring + drop-lines) to a base plot
   add_fit <- function(g, fit, col, lty) {
@@ -187,29 +206,27 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
   # 1..zoom_hi (right). The zoom uses its own y-range over the shown ranks.
   zoom_hi <- min(20, max(d$rank))
   yr_zoom <- range(d$log_prom[d$rank <= zoom_hi], na.rm = TRUE)
-  lin_base <- function() add_fit(g0, lin_fit, "darkorange2", "dashed") +
+  lin_base <- function() add_fit(mk_base(lr_lin_reg), lin_fit, "darkorange2", "dashed") +
     geom_point(data = pk, aes(rank, log_prom), colour = "firebrick", size = 2.4) +
     labs(y = "log10(prom) [UMI/µm²]", title = NULL) + theme_minimal()
   g_lin_full <- lin_base() +
     coord_cartesian(xlim = xr, ylim = yr) +
     labs(x = "peak rank (linear)",
-         subtitle = sprintf("linear-rank lr fit  %s | fc p1=%.2f p2=%.2f | n_regions=%s",
-                            r2txt(lin_fit), lr_lfc_lin[1], lr_lfc_lin[2],
-                            ifelse(is.finite(n_reg_lin), as.character(round(n_reg_lin)), "NA")))
+         subtitle = sprintf("linear-rank lr fit  %s | fc p1=%.2f p2=%.2f | linregions(green)=%s",
+                            r2txt(lin_fit), lr_lfc_lin[1], lr_lfc_lin[2], nreg_txt(lr_lin_reg)))
   g_lin_zoom <- lin_base() +
     coord_cartesian(xlim = c(1, zoom_hi), ylim = yr_zoom) +
     labs(x = "peak rank (linear)", y = NULL,
          subtitle = sprintf("zoom: peaks 1-%d", zoom_hi))
   g_lin_rank <- g_lin_full | g_lin_zoom
 
-  g_log_rank <- add_fit(g0, log_fit, "steelblue", "dotted") +
+  g_log_rank <- add_fit(mk_base(lr_log_reg), log_fit, "steelblue", "dotted") +
     geom_point(data = pk, aes(rank, log_prom), colour = "firebrick", size = 2.4) +
     scale_x_log10() +
     coord_cartesian(xlim = xr, ylim = yr) +
     labs(x = "peak rank (log)", y = "log10(prom) [UMI/µm²]", title = NULL,
-         subtitle = sprintf("log-rank lr fit  %s | fc p1=%.2f p2=%.2f | n_regions=%s",
-                            r2txt(log_fit), lr_lfc_log[1], lr_lfc_log[2],
-                            ifelse(is.finite(n_reg_log), as.character(round(n_reg_log)), "NA"))) +
+         subtitle = sprintf("log-rank lr fit  %s | fc p1=%.2f p2=%.2f | linregions(green)=%s",
+                            r2txt(log_fit), lr_lfc_log[1], lr_lfc_log[2], nreg_txt(lr_log_reg))) +
     theme_minimal()
   main_panels <- list(g_lin_rank, g_log_rank)
 

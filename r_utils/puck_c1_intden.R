@@ -9,7 +9,7 @@
 # Depends: .get_cell_row().
 puck_c1_intden <- function(cell_id, profiles_df, suffix = "-1",
                                normalize = FALSE, norm_r = NULL,
-                               step = 2, roll = 1, title = NULL) {
+                               step = 2, roll = 1, gauss_sd = 5, title = NULL) {
   ttl <- if (missing(title)) cell_id else title
   row <- .get_cell_row(profiles_df, cell_id, suffix)
   if (is.null(row))
@@ -58,6 +58,24 @@ puck_c1_intden <- function(cell_id, profiles_df, suffix = "-1",
     adj$dfom <- ifelse(is.na(rmean(adj$dfom)), adj$dfom, rmean(adj$dfom))
   }
 
+  # gaussian-smoothed cumUMI, then its first derivative. Each smoothed value is a
+  # gaussian-weighted (sd = gauss_sd µm) average of cumUMI over radius; the
+  # derivative is the central difference of that smooth curve. Less spiky than the
+  # step slope; gauss_sd sets the smoothing scale.
+  gdf <- NULL
+  if (!is.null(gauss_sd) && gauss_sd > 0 && nrow(d) >= 5) {
+    rr <- d$radius; cc <- d$cumumi
+    sm <- vapply(seq_along(rr), function(k) {
+      w <- dnorm(rr - rr[k], 0, gauss_sd); sum(w * cc) / sum(w)
+    }, numeric(1))
+    m  <- length(rr)
+    gd <- numeric(m)
+    gd[2:(m - 1)] <- (sm[3:m] - sm[1:(m - 2)]) / (rr[3:m] - rr[1:(m - 2)])
+    gd[1] <- (sm[2] - sm[1]) / (rr[2] - rr[1])
+    gd[m] <- (sm[m] - sm[m - 1]) / (rr[m] - rr[m - 1])
+    gdf <- data.frame(radius = rr, d1 = gd)
+  }
+
   # top: cumulative UMI vs radius (raw, no fit), with fraction-of-max on the right
   p <- ggplot(data.frame(radius = d$radius, cumumi = cumdisp),
               aes(radius, cumumi)) +
@@ -72,16 +90,21 @@ puck_c1_intden <- function(cell_id, profiles_df, suffix = "-1",
 
   if (is.null(adj)) return(p)
 
-  # radius of the strongest raw derivative (core radius) for annotation
-  rmax <- adj$radius[which.max(adj$d1)]
+  # core radius = peak of the gaussian-smoothed derivative if available, else step
+  rmax <- if (!is.null(gdf)) gdf$radius[which.max(gdf$d1)]
+          else adj$radius[which.max(adj$d1)]
 
   p_d1 <- ggplot(adj, aes(radius, d1)) +
     geom_hline(yintercept = 0, colour = "grey85") +
-    geom_line(colour = "grey40", linewidth = 0.5) +
+    geom_line(colour = "grey75", linewidth = 0.4)
+  if (!is.null(gdf))
+    p_d1 <- p_d1 + geom_line(data = gdf, aes(radius, d1),
+                             colour = "firebrick", linewidth = 0.8)
+  p_d1 <- p_d1 +
     geom_vline(xintercept = rmax, linetype = "dotted", colour = "firebrick") +
     labs(x = NULL, y = "d(cumUMI)/dr  [UMI/µm]",
-         subtitle = sprintf("1st derivative (slope over %d-pt step); max at r=%g µm",
-                            step, rmax)) +
+         subtitle = sprintf("grey=%d-pt step; red=gaussian(sd=%g µm) deriv; max at r=%g µm",
+                            step, gauss_sd, rmax)) +
     theme_minimal()
 
   p_df <- ggplot(adj, aes(radius, dfom)) +
