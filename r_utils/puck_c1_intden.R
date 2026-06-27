@@ -1,13 +1,15 @@
 # cumulative UMI within radius r of the c1 centroid (cumumi_r001..r400 from the
 # profiles row). No curve fitting: the lower panels show the RAW first derivative
-# d(cumUMI)/dr between adjacent radii and the adjacent difference in fraction-of-
-# max, Δ(cumUMI / max(cumUMI)). normalize = TRUE divides the cumulative curve by
-# the value at `norm_r` (default the largest radius) for cross-cell comparison;
-# the fraction-of-max difference always uses each cell's own max.
+# d(cumUMI)/dr and the difference in fraction-of-max Δ(cumUMI / max(cumUMI)).
+# Each is a `step`-lagged slope — between point n and n+step (default 2; use 3 for
+# more smoothing) — placed at the midpoint radius, rather than an adjacent
+# (lag-1) difference. normalize = TRUE divides the cumulative curve by the value
+# at `norm_r` (default the largest radius) for cross-cell comparison; the
+# fraction-of-max difference always uses each cell's own max.
 # Depends: .get_cell_row().
 puck_c1_intden <- function(cell_id, profiles_df, suffix = "-1",
                                normalize = FALSE, norm_r = NULL,
-                               roll = 1, title = NULL) {
+                               step = 2, roll = 1, title = NULL) {
   ttl <- if (missing(title)) cell_id else title
   row <- .get_cell_row(profiles_df, cell_id, suffix)
   if (is.null(row))
@@ -34,16 +36,19 @@ puck_c1_intden <- function(cell_id, profiles_df, suffix = "-1",
     if (is.finite(denom) && denom > 0) { cumdisp <- d$cumumi / denom; ylab <- "fraction of UMI" }
   }
 
-  # raw adjacent-point quantities (placed at the outer radius of each step):
-  #   d1   = Δ(cumUMI)/Δradius              -> raw first derivative (UMI / µm)
-  #   dfom = Δ(cumUMI / max(cumUMI))        -> adjacent diff in fraction of max
+  # step-lagged slope between point i and i+step (placed at the midpoint radius):
+  #   d1   = (cumUMI[i+step]-cumUMI[i]) / (r[i+step]-r[i])  -> 1st derivative (UMI/µm)
+  #   dfom = frac[i+step]-frac[i]                           -> diff in fraction of max
   frac <- d$cumumi / ymax
   n    <- nrow(d)
-  adj  <- if (n >= 2) data.frame(
-            radius = d$radius[-1],
-            d1     = diff(d$cumumi) / diff(d$radius),
-            dfom   = diff(frac)
-          ) else NULL
+  step <- max(1L, as.integer(step))
+  adj  <- if (n > step) {
+            i <- seq_len(n - step); j <- i + step
+            data.frame(
+              radius = (d$radius[i] + d$radius[j]) / 2,
+              d1     = (d$cumumi[j] - d$cumumi[i]) / (d$radius[j] - d$radius[i]),
+              dfom   = frac[j] - frac[i])
+          } else NULL
 
   # optional light centred rolling mean (roll > 1) for legibility; raw by default
   if (!is.null(adj) && roll > 1) {
@@ -75,7 +80,8 @@ puck_c1_intden <- function(cell_id, profiles_df, suffix = "-1",
     geom_line(colour = "grey40", linewidth = 0.5) +
     geom_vline(xintercept = rmax, linetype = "dotted", colour = "firebrick") +
     labs(x = NULL, y = "d(cumUMI)/dr  [UMI/µm]",
-         subtitle = sprintf("raw 1st derivative; max at r=%g µm", rmax)) +
+         subtitle = sprintf("1st derivative (slope over %d-pt step); max at r=%g µm",
+                            step, rmax)) +
     theme_minimal()
 
   p_df <- ggplot(adj, aes(radius, dfom)) +
@@ -83,7 +89,7 @@ puck_c1_intden <- function(cell_id, profiles_df, suffix = "-1",
     geom_line(colour = "steelblue", linewidth = 0.5) +
     geom_vline(xintercept = rmax, linetype = "dotted", colour = "firebrick") +
     labs(x = "radius from c1 centroid (µm)", y = "Δ fraction of max",
-         subtitle = "adjacent difference in fraction of max") +
+         subtitle = sprintf("difference in fraction of max (over %d-pt step)", step)) +
     theme_minimal()
 
   patchwork::wrap_plots(p, p_d1, p_df, ncol = 1, heights = c(2, 1, 1))
