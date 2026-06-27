@@ -1,10 +1,24 @@
-# region counting on the log10(prominence)-vs-rank curve — R reimplementation of
-# map_cells.py `_count_regions`, so the {linrank,logrank}_n_regions / n_transitions
-# metrics can be inspected per cell. Steps: smooth log-prom with a [.25,.5,.25]
+# centred moving average over ±nbr neighbours (window shrinks at the edges).
+# "two neighbours" -> nbr = 2 (window of up to 5 points).
+.smooth_window <- function(v, nbr = 2) {
+  n <- length(v)
+  if (n < 3 || nbr < 1) return(v)
+  out <- numeric(n)
+  for (i in seq_len(n)) {
+    lo <- max(1, i - nbr); hi <- min(n, i + nbr)
+    out[i] <- mean(v[lo:hi])
+  }
+  out
+}
+
+# region counting on the log10(prominence)-vs-rank curve — R analogue of
+# map_cells.py `_count_regions`. Steps: smooth log-prom with a [.25,.5,.25]
 # kernel, take d/dx in the chosen rank space (linrank: x=rank; logrank: x=log10
-# rank), spline-smooth the derivative, then count local minima whose dip-prominence
-# (drop from the higher flanking ridge) >= min_prom. transitions = those minima;
-# regions = transitions + 1. Returns the per-rank fit frame + the two counts.
+# rank), smooth the derivative with a two-neighbour moving average (no spline),
+# then count local minima whose dip-prominence (drop from the higher flanking
+# ridge) >= min_prom. transitions = those minima; regions = transitions + 1.
+# Returns the per-rank fit frame + the two counts. (NB: map_cells.py itself uses
+# a UnivariateSpline here; this panel deliberately uses the simpler smoother.)
 .prom_region_fit <- function(prom, space = c("linrank", "logrank"),
                              min_prom = 0.05) {
   space <- match.arg(space)
@@ -25,9 +39,8 @@
   g[1] <- (sm[2] - sm[1]) / (x[2] - x[1])
   g[n] <- (sm[n] - sm[n - 1]) / (x[n] - x[n - 1])
 
-  # spline-smooth the derivative (scipy UnivariateSpline analogue)
-  ss <- tryCatch(stats::smooth.spline(x, g), error = function(e) NULL)
-  sp <- if (is.null(ss)) g else stats::predict(ss, x)$y
+  # smooth the derivative with a two-neighbour moving average (no spline)
+  sp <- .smooth_window(g, nbr = 2)
 
   # local minima with dip-prominence >= min_prom
   is_min <- rep(FALSE, n)

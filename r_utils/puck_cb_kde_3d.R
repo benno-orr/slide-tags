@@ -1,14 +1,19 @@
 # 3D persp surface of the σ-KDE bead density for one cell (matches map_cells.py's
 # Gaussian-sum KDE). bead_df = pair step's cell-barcode_coords.csv (cell_bc_10x,
 # nUMI, x_um, y_um). Rendered via ggplotify so it composes in wrap_plots().
+# If profiles_df (cell_coords.csv) is given, peaks 1-9 (peakK_x/peakK_y) are
+# marked on the surface as circles coloured by prominence rank (plasma; rank 1 =
+# highest prom = brightest). Depends: .get_cell_row() when profiles_df is used.
 puck_cb_kde_3d <- function(cell_id, bead_df,
+                           profiles_df = NULL,
                            suffix = "-1",
                            sigma = 40,
-                           grid = 300,
+                           grid = 500,
                            theta = 35,
                            phi = 25,
                            clip_bottom = 0.05,
                            wire = FALSE, wire_n = 30, wire_col = "grey30",
+                           n_peaks = 9, peak_cex = 1.6, peak_labels = TRUE,
                            title = NULL) {
   require(viridisLite)
 
@@ -31,7 +36,7 @@ puck_cb_kde_3d <- function(cell_id, bead_df,
   Ax <- exp(-outer(gx, x, "-")^2 / (2 * sigma^2))
   Ay <- exp(-outer(gy, y, "-")^2 / (2 * sigma^2))
   Z <- (Ax %*% t(sweep(Ay, 2, u, "*"))) / (2 * pi * sigma^2)
-  Z <- as.matrix(Z)
+  Z <- as.matrix(Z)                          # Z[i, j] = density at (gx[i], gy[j])
 
   Zfacet <- (
     Z[-1, -1] +
@@ -47,6 +52,48 @@ puck_cb_kde_3d <- function(cell_id, bead_df,
   cols <- viridisLite::viridis(256, begin = 0.1, end = 1)[
     cut(Zcolor, breaks = 256, include.lowest = TRUE)
   ]
+
+  # peaks 1..n_peaks from the profiles table, positioned on the surface (z via
+  # bilinear interpolation of Z at the peak xy), coloured by prominence rank.
+  peaks <- NULL
+  if (!is.null(profiles_df)) {
+    row <- .get_cell_row(profiles_df, cell_id, suffix)
+    if (!is.null(row)) {
+      K <- seq_len(n_peaks)
+      cx <- paste0("peak", K, "_x"); cy <- paste0("peak", K, "_y")
+      have <- cx %in% names(row) & cy %in% names(row)
+      K <- K[have]
+      if (length(K) > 0) {
+        px <- suppressWarnings(as.numeric(row[1, paste0("peak", K, "_x")]))
+        py <- suppressWarnings(as.numeric(row[1, paste0("peak", K, "_y")]))
+        ok <- is.finite(px) & is.finite(py) &
+              px >= min(gx) & px <= max(gx) & py >= min(gy) & py <= max(gy)
+        K <- K[ok]; px <- px[ok]; py <- py[ok]
+        if (length(K) > 0) {
+          interp_z <- function(xq, yq) {
+            ix <- pmin(pmax(findInterval(xq, gx), 1), length(gx) - 1)
+            iy <- pmin(pmax(findInterval(yq, gy), 1), length(gy) - 1)
+            tx <- (xq - gx[ix]) / (gx[ix + 1] - gx[ix])
+            ty <- (yq - gy[iy]) / (gy[iy + 1] - gy[iy])
+            Z[cbind(ix, iy)]         * (1 - tx) * (1 - ty) +
+            Z[cbind(ix + 1, iy)]     *      tx  * (1 - ty) +
+            Z[cbind(ix, iy + 1)]     * (1 - tx) *      ty  +
+            Z[cbind(ix + 1, iy + 1)] *      tx  *      ty
+          }
+          # plasma by prom rank: rank 1 (highest prom) = brightest
+          pal <- rev(viridisLite::plasma(n_peaks))
+          peaks <- data.frame(rank = K, x = px, y = py,
+                              z = interp_z(px, py), col = pal[K])
+        }
+      }
+    }
+  }
+
+  # device-independent 3D→2D projection (avoids depending on trans3d's location)
+  proj3d <- function(x, y, z, pmat) {
+    tr <- cbind(x, y, z, 1) %*% pmat
+    list(x = tr[, 1] / tr[, 4], y = tr[, 2] / tr[, 4])
+  }
 
   # render the base-graphics persp into a grob/ggplot so it COMPOSES (e.g. in
   # wrap_plots) instead of painting over the active device. as.ggplot runs the
@@ -74,15 +121,26 @@ puck_cb_kde_3d <- function(cell_id, bead_df,
       xlim = cx + c(-hx, hx), ylim = cy + c(-hy, hy), zlim = range(Z, finite = TRUE),
       box = FALSE, axes = FALSE, xlab = "", ylab = "", zlab = "", main = ""
     )
-    do.call(persp, c(list(gx, gy, Z, col = cols, border = NA, shade = 0.35), pargs))
+    pmat <- do.call(persp, c(list(gx, gy, Z, col = cols, border = NA, shade = 0.35), pargs))
 
     # optional coarse wireframe overlaid on the filled surface
     if (wire) {
       st <- max(1L, floor(grid / wire_n))
       ix <- seq(1L, length(gx), by = st); iy <- seq(1L, length(gy), by = st)
       par(new = TRUE)
-      do.call(persp, c(list(gx[ix], gy[iy], Z[ix, iy], col = NA,
-                            border = wire_col, lwd = 0.4), pargs))
+      pmat <- do.call(persp, c(list(gx[ix], gy[iy], Z[ix, iy], col = NA,
+                                    border = wire_col, lwd = 0.4), pargs))
+    }
+
+    # mark peaks 1..n on the surface (lifted slightly so they sit on top)
+    if (!is.null(peaks) && nrow(peaks) > 0) {
+      lift <- 0.03 * diff(range(Z, finite = TRUE))
+      tp <- proj3d(peaks$x, peaks$y, peaks$z + lift, pmat)
+      points(tp$x, tp$y, pch = 21, bg = peaks$col, col = "black",
+             lwd = 0.7, cex = peak_cex)
+      if (peak_labels)
+        text(tp$x, tp$y, labels = peaks$rank, pos = 3, offset = 0.25,
+             cex = 0.55, col = "grey15")
     }
   }
 

@@ -1,7 +1,15 @@
-puck_cb_scatter = function(cell_id, bead_df, suffix = "-1", eps = 50, title = NULL, min_samples = c(10, 9, 8)) {
+puck_cb_scatter = function(cell_id, bead_df, profiles_df = NULL,
+                           mode = c("raw", "norm"),
+                           suffix = "-1", eps = 50, title = NULL,
+                           min_samples = c(10, 9, 8), norm_to = 1000) {
   require(dbscan)
+  mode <- match.arg(mode)
   # bead_df: pair step's cell-barcode_coords.csv with columns cell_bc_10x,
   # bead_bc, nUMI, x_um, y_um — x/y already joined from the puck.
+  # mode "raw"  : per-bead nUMI weights, descending min_samples escalation.
+  # mode "norm" : w = nUMI/Σ nUMI × norm_to, single DBSCAN at the stored
+  #               norm_minpts (from profiles_df), else a high→low scan picking
+  #               the highest minPts giving ≥2 clusters — matching map_cells.py.
 
   cb        <- sub(paste0(suffix, "$"), "", cell_id)
 
@@ -12,14 +20,34 @@ puck_cb_scatter = function(cell_id, bead_df, suffix = "-1", eps = 50, title = NU
   if (nrow(df) == 0) return(ggplot() + ggtitle(paste0(cell_id, " — no beads")))
 
   xy <- as.matrix(df[, c("x_um", "y_um")])
+  minpts_used <- NA_real_
 
-  # DBSCAN with descending min_samples escalation; cluster 0 = noise.
-  # UMI-weighted to match the mapping pipeline: minPts is compared to the summed
-  # nUMI in each neighbourhood, so a few high-UMI beads can form a cluster.
-  lbls <- rep(0L, nrow(df))
-  for (ms in min_samples) {
-    res <- dbscan::dbscan(xy, eps = eps, minPts = ms, weights = df$nUMI)
-    if (any(res$cluster > 0)) { lbls <- res$cluster; break }
+  if (mode == "raw") {
+    # cluster 0 = noise; first min_samples tier with ≥1 cluster wins.
+    lbls <- rep(0L, nrow(df))
+    for (ms in min_samples) {
+      res <- dbscan::dbscan(xy, eps = eps, minPts = ms, weights = df$nUMI)
+      if (any(res$cluster > 0)) { lbls <- res$cluster; minpts_used <- ms; break }
+    }
+  } else {
+    w <- df$nUMI / sum(df$nUMI) * norm_to
+    # prefer the pipeline's stored norm_minpts for an exact match
+    ms <- NA_real_
+    if (!is.null(profiles_df)) {
+      prow <- .get_cell_row(profiles_df, cell_id, suffix)
+      if (!is.null(prow) && "norm_minpts" %in% names(prow))
+        ms <- suppressWarnings(as.numeric(prow[["norm_minpts"]][1]))
+    }
+    if (!is.finite(ms)) {                       # fallback: high→low scan
+      for (cand in seq(200, 1)) {
+        res <- dbscan::dbscan(xy, eps = eps, minPts = cand, weights = w)
+        if (length(unique(res$cluster[res$cluster > 0])) >= 2) { ms <- cand; break }
+      }
+    }
+    lbls <- if (is.finite(ms))
+      dbscan::dbscan(xy, eps = eps, minPts = ms, weights = w)$cluster
+    else rep(0L, nrow(df))
+    minpts_used <- ms
   }
 
   # c1 = largest cluster by summed UMI, c2+ = remaining clusters, c0 = noise
@@ -110,7 +138,10 @@ puck_cb_scatter = function(cell_id, bead_df, suffix = "-1", eps = 50, title = NU
       hjust = 0, size = 3.2, colour = "black"
     )
 
-  title = if (is.null(title)) cell_id else title
+  title = if (is.null(title))
+    sprintf("%s — %s dbscan (minPts=%s)", cell_id, mode,
+            ifelse(is.finite(minpts_used), as.character(round(minpts_used, 1)), "NA"))
+  else title
 
   p +
     coord_fixed() +

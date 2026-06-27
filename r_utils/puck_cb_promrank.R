@@ -112,23 +112,11 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
   if (!is.null(gproj))
     g <- g + geom_line(data = gproj, colour = "purple", linewidth = 0.8)
 
-  # spline fit to the log-log curve; its 1st derivative = local power-law slope
-  # (d log prom / d log rank), 2nd derivative = curvature (zero-crossings mark
-  # the inflection points).
-  sl <- data.frame(rank = d$rank, lr = log10(d$rank), lp = d$log_prom)
-  sl <- sl[is.finite(sl$lr) & is.finite(sl$lp) &
-           sl$rank > 5 & sl$rank <= 150, , drop = FALSE]
-  fitc <- NULL
-  if (nrow(sl) >= 5 && length(unique(sl$lr)) >= 4) {
-    ssp <- stats::smooth.spline(sl$lr, sl$lp, spar = spline_spar)
-    lrg <- seq(min(sl$lr), max(sl$lr), length.out = 400)
-    fitc <- data.frame(rank = 10^lrg,
-                       log_prom = predict(ssp, lrg)$y,
-                       d1 = predict(ssp, lrg, deriv = 1)$y,
-                       d2 = predict(ssp, lrg, deriv = 2)$y)
-    g <- g + geom_line(data = fitc, aes(rank, log_prom),
-                       colour = "forestgreen", linewidth = 0.8)
-  }
+  # smoothed prom curve: two-neighbour moving average of log10(prom) (no spline),
+  # drawn green. Renders sensibly in both linear- and log-rank x.
+  smooth_df <- data.frame(rank = d$rank,
+                          log_prom = .smooth_window(d$log_prom, nbr = 2))
+  g <- g + geom_line(data = smooth_df, colour = "forestgreen", linewidth = 0.7)
 
   # leftmost-line ("lr") fits, re-fit from each line's STORED rank window so the
   # overlay reproduces map_cells.py exactly. Two rank spaces, drawn for compare:
@@ -182,22 +170,31 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
   dv <- if (is.null(max_rank)) d else d[d$rank <= max_rank, , drop = FALSE]
   yr <- range(dv$log_prom, na.rm = TRUE)
   xr <- c(1, if (is.null(max_rank)) max(d$rank) else max_rank)
-  xsc <- list(scale_x_log10(), coord_cartesian(xlim = xr))
   # stored pipeline values (authoritative): bestfit lr fold change + region counts
   bf1 <- num("peak1_bestfit_lr_fc"); bf2 <- num("peak2_bestfit_lr_fc")
   n_reg_lin <- num("linrank_n_regions"); n_reg_log <- num("logrank_n_regions")
-  g <- g +
+
+  # `g` now carries the points + both lr lines + spline + peaks but no x-scale.
+  # Render it twice — once in linear-rank x, once in log-rank x — so each lr line
+  # (orange = linear-rank fit, blue = log-rank fit) appears straight in its own
+  # space. The linear-rank panel carries the full metric subtitle.
+  sub_full <- sprintf(
+    "lr_fc(refit) p1 lin=%.2f log=%.2f  p2 lin=%.2f log=%.2f | bestfit p1=%.2f p2=%.2f | n_regions lin=%s log=%s",
+    lr_lfc_lin[1], lr_lfc_log[1], lr_lfc_lin[2], lr_lfc_log[2], bf1, bf2,
+    ifelse(is.finite(n_reg_lin), as.character(round(n_reg_lin)), "NA"),
+    ifelse(is.finite(n_reg_log), as.character(round(n_reg_log)), "NA"))
+  g_lin_rank <- g +
+    coord_cartesian(xlim = xr, ylim = yr) +
+    labs(x = "peak rank (linear)", y = "log10(prom) [UMI/µm²]",
+         title = NULL, subtitle = sub_full) +
+    theme_minimal()
+  g_log_rank <- g +
     scale_x_log10() +
     coord_cartesian(xlim = xr, ylim = yr) +
-    labs(x = "peak rank (log)", y = "log10(prominence)  [UMI/µm²]",
-         title = NULL,
-         subtitle = sprintf(
-           "lr_fc(refit) p1 lin=%.2f log=%.2f  p2 lin=%.2f log=%.2f | bestfit p1=%.2f p2=%.2f | n_regions lin=%s log=%s",
-           lr_lfc_lin[1], lr_lfc_log[1], lr_lfc_lin[2], lr_lfc_log[2],
-           bf1, bf2,
-           ifelse(is.finite(n_reg_lin), as.character(round(n_reg_lin)), "NA"),
-           ifelse(is.finite(n_reg_log), as.character(round(n_reg_log)), "NA"))) +
+    labs(x = "peak rank (log)", y = "log10(prom) [UMI/µm²]",
+         title = NULL, subtitle = "log-rank x-axis") +
     theme_minimal()
+  main_panels <- list(g_lin_rank, g_log_rank)
 
   # ---- region metric panels: reproduce map_cells.py region counting so the
   # ---- transitions behind {linrank,logrank}_n_regions are visible ----------
@@ -228,11 +225,11 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
                               mk_reg(rf_log, "logrank", n_reg_log)))
   }
 
-  # no gamma fit: show the prom-rank plot (+ region panels) with the lr fits
+  # no gamma fit: show both prom-rank panels (+ region panels) with the lr fits
   if (is.null(glin)) {
-    if (length(reg_panels) == 0) return(g)
-    return(patchwork::wrap_plots(c(list(g), reg_panels), ncol = 1,
-                                 heights = c(2, rep(1, length(reg_panels)))))
+    panels  <- c(main_panels, reg_panels)
+    heights <- c(2, 2, rep(1, length(reg_panels)))
+    return(patchwork::wrap_plots(panels, ncol = 1, heights = heights))
   }
 
   # deviation z-score (computed above): residual from the gamma line in log
@@ -245,7 +242,7 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
   g_title <- if (!is.null(gpar)) gpar else NULL
 
   pk_lin <- glin[r12, , drop = FALSE]
-  g_lin <- ggplot(glin, aes(exp, obs)) +
+  g_gam <- ggplot(glin, aes(exp, obs)) +
     geom_abline(slope = 1, intercept = 0, colour = "purple", linewidth = 0.8) +
     geom_point(size = 1, colour = "grey40") +
     geom_point(data = pk_lin, colour = "firebrick", size = 2.4) +
@@ -272,7 +269,7 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
          subtitle = "bg residuals; dashed = ±MAD, red = peaks") +
     theme_minimal()
 
-  panels  <- c(list(g), reg_panels, list(g_lin, p_resid))
-  heights <- c(2, rep(1, length(reg_panels)), 2, 1)
+  panels  <- c(main_panels, reg_panels, list(g_gam, p_resid))
+  heights <- c(2, 2, rep(1, length(reg_panels)), 2, 1)
   patchwork::wrap_plots(panels, ncol = 1, heights = heights)
 }
