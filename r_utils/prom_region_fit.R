@@ -47,6 +47,15 @@
   ss <- tryCatch(stats::smooth.spline(x[fit_idx], g[fit_idx]), error = function(e) NULL)
   sp[fit_idx] <- if (is.null(ss)) g[fit_idx] else stats::predict(ss, x[fit_idx])$y
 
+  # second derivative: central difference of the smoothed first derivative (sp)
+  # over the fitted ranks (NA outside / at the fitted edges).
+  sp2 <- rep(NA_real_, n)
+  fi <- fit_idx
+  if (length(fi) >= 3) {
+    inner <- fi[-c(1, length(fi))]
+    sp2[inner] <- (sp[inner + 1] - sp[inner - 1]) / (x[inner + 1] - x[inner - 1])
+  }
+
   # local minima of the spline (over the fitted ranks) with dip-prominence >= min_prom
   is_min <- rep(FALSE, n)
   lo <- min(fit_idx); hi <- max(fit_idx)
@@ -58,7 +67,7 @@
   }
 
   list(df = data.frame(rank = rank, x = x, smooth = sm, deriv = g,
-                       spline = sp, is_min = is_min),
+                       spline = sp, spline2 = sp2, is_min = is_min),
        n_transitions = sum(is_min),
        n_regions     = sum(is_min) + 1L)
 }

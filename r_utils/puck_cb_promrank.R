@@ -213,33 +213,42 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
     theme_minimal()
   main_panels <- list(g_lin_rank, g_log_rank)
 
-  # ---- region metric panels: reproduce map_cells.py region counting so the
-  # ---- transitions behind {linrank,logrank}_n_regions are visible ----------
+  # ---- region metric panels (linear-rank only): 1st derivative of the smoothed
+  # ---- log-prom curve (with transition minima behind linrank_n_regions), plus
+  # ---- the 2nd derivative. Linear rank x-axis (the derivative is wrt rank).
   reg_panels <- list()
   if (show_regions) {
-    rf_lin <- .prom_region_fit(p, "linrank", region_min_prom, region_top_exclude)
-    rf_log <- .prom_region_fit(p, "logrank", region_min_prom, region_top_exclude)
-    mk_reg <- function(rf, lab, stored) {
-      if (is.null(rf)) return(NULL)
+    rf <- .prom_region_fit(p, "linrank", region_min_prom, region_top_exclude)
+    if (!is.null(rf)) {
       df <- rf$df; mins <- df[df$is_min, , drop = FALSE]
-      pp <- ggplot(df, aes(rank, spline)) +
+      p_d1 <- ggplot(df, aes(rank, spline)) +
         geom_hline(yintercept = 0, colour = "grey85") +
         geom_line(aes(y = deriv), colour = "grey70", linewidth = 0.4) +
         geom_line(colour = "forestgreen", linewidth = 0.7)
       if (nrow(mins) > 0)
-        pp <- pp + geom_point(data = mins, colour = "firebrick", size = 2.2) +
+        p_d1 <- p_d1 + geom_point(data = mins, colour = "firebrick", size = 2.2) +
           geom_vline(data = mins, aes(xintercept = rank),
                      linetype = "dotted", colour = "firebrick")
-      pp + scale_x_log10() + coord_cartesian(xlim = xr) +
-        labs(x = "peak rank (log)", y = "d(smooth logP)/dx",
-             subtitle = sprintf("%s: transitions(refit)=%d  stored n_regions=%s",
-                                 lab, rf$n_transitions,
-                                 ifelse(is.finite(stored), as.character(round(stored)), "NA"))) +
+      p_d1 <- p_d1 + coord_cartesian(xlim = xr) +
+        labs(x = NULL, y = "d(smooth logP)/dx",
+             subtitle = sprintf("linrank 1st deriv: transitions(refit)=%d  stored n_regions=%s",
+                                rf$n_transitions,
+                                ifelse(is.finite(n_reg_lin), as.character(round(n_reg_lin)), "NA"))) +
         theme_minimal()
+
+      p_d2 <- ggplot(df, aes(rank, spline2)) +
+        geom_hline(yintercept = 0, colour = "grey85") +
+        geom_line(colour = "purple", linewidth = 0.7)
+      if (nrow(mins) > 0)
+        p_d2 <- p_d2 + geom_vline(data = mins, aes(xintercept = rank),
+                                  linetype = "dotted", colour = "firebrick")
+      p_d2 <- p_d2 + coord_cartesian(xlim = xr) +
+        labs(x = "peak rank (linear)", y = "d²(smooth logP)/dx²",
+             subtitle = "linrank 2nd derivative") +
+        theme_minimal()
+
+      reg_panels <- list(p_d1, p_d2)
     }
-    reg_panels <- Filter(Negate(is.null),
-                         list(mk_reg(rf_lin, "linrank", n_reg_lin),
-                              mk_reg(rf_log, "logrank", n_reg_log)))
   }
 
   # no gamma fit: show both prom-rank panels (+ region panels) with the lr fits
