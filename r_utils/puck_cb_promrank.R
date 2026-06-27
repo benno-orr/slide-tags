@@ -246,7 +246,7 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
         p_d1 <- p_d1 + geom_point(data = mins, colour = "firebrick", size = 2.2) +
           geom_vline(data = mins, aes(xintercept = rank),
                      linetype = "dotted", colour = "firebrick")
-      p_d1 <- p_d1 + coord_cartesian(xlim = xr) +
+      p_d1 <- p_d1 + coord_cartesian(xlim = xr, ylim = c(-0.01, NA)) +
         labs(x = NULL, y = "d(smooth logP)/dx",
              subtitle = sprintf("linrank 1st deriv: transitions(refit)=%d  stored n_regions=%s",
                                 rf$n_transitions,
@@ -259,7 +259,7 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
       if (nrow(mins) > 0)
         p_d2 <- p_d2 + geom_vline(data = mins, aes(xintercept = rank),
                                   linetype = "dotted", colour = "firebrick")
-      p_d2 <- p_d2 + coord_cartesian(xlim = xr) +
+      p_d2 <- p_d2 + coord_cartesian(xlim = xr, ylim = c(-0.01, NA)) +
         labs(x = "peak rank (linear)", y = "d²(smooth logP)/dx²",
              subtitle = "linrank 2nd derivative") +
         theme_minimal()
