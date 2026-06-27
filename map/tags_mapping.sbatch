@@ -21,8 +21,9 @@ pdir="${SLIDE_TAGS_MAP_DIR:-/n/data1/hms/scrb/chen/lab/bco/pipelines/slide-tags/
 mkdir -p "$out_dir"
 cd "$pdir"
 
-# record provenance
-cp "$puck" "$out_dir/$(basename "$puck")"
+# record provenance (skip the copy when puck already lives in out_dir, e.g. an
+# in-place rerun — cp onto itself would abort under set -e)
+[ "$puck" -ef "$out_dir/$(basename "$puck")" ] || cp "$puck" "$out_dir/$(basename "$puck")"
 echo "$whitelist" > "$out_dir/pair_whitelist.txt"
 
 echo "=== map_cells $sample ==="
