@@ -59,8 +59,8 @@ prof <- read.table(map_csv, header = TRUE, sep = ",",
                    stringsAsFactors = FALSE, check.names = FALSE)
 cb_col <- names(prof)[1]   # pandas writes the index (cb) as the first column
 
-prom_cols <- grep("^prom[0-9]+$", names(prof), value = TRUE)
-prom_cols <- prom_cols[order(as.integer(sub("^prom", "", prom_cols)))]
+prom_cols <- grep("^peak[0-9]+_prom$", names(prof), value = TRUE)
+prom_cols <- prom_cols[order(as.integer(gsub("[^0-9]", "", prom_cols)))]
 cum_cols  <- grep("^cumumi_r[0-9]+$", names(prof), value = TRUE)
 cum_rad   <- as.integer(sub("^cumumi_r", "", cum_cols))
 o <- order(cum_rad); cum_cols <- cum_cols[o]; cum_rad <- cum_rad[o]
