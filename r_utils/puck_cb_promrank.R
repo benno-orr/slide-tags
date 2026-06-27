@@ -108,92 +108,98 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
     glin$z <- resid / mad_bg
   }
 
-  g <- ggplot(d, aes(rank, log_prom)) +
-    geom_point(size = 1.3, colour = "grey40")
-  if (!is.null(gproj))
-    g <- g + geom_line(data = gproj, colour = "purple", linewidth = 0.8)
-
-  # smoothed prom curve: two-neighbour moving average of log10(prom) (no spline),
-  # drawn green. Renders sensibly in both linear- and log-rank x.
-  smooth_df <- data.frame(rank = d$rank,
-                          log_prom = .smooth_window(d$log_prom, nbr = 2))
-  g <- g + geom_line(data = smooth_df, colour = "forestgreen", linewidth = 0.7)
-
-  # leftmost-line ("lr") fits, re-fit from each line's STORED rank window so the
-  # overlay reproduces map_cells.py exactly. Two rank spaces, drawn for compare:
-  #   orange = linear-rank   log10(prom) ~ rank         (linrank_lr_*)
-  #   blue   = log-rank      log10(prom) ~ log10(rank)  (logrank_lr_*)
-  # window cols {linrank,logrank}_lr_sec_lo/_sec_hi; prom > fit_prom_max excluded.
-  # peakK_*_lr_fc = vertical gap from the line (projected to rank K) up to peak K;
-  # dashed = linear-rank drop-line, dotted = log-rank drop-line.
   num <- function(nm) suppressWarnings(as.numeric(row[[nm]][1]))
   kk  <- seq_len(min(2, length(p)))
   lr_lfc_lin <- lr_lfc_log <- rep(NA_real_, 2)
 
+  # leftmost-line ("lr") fits, re-fit from each line's STORED rank window so the
+  # overlay reproduces map_cells.py. The linear-rank fit (log10(prom) ~ rank,
+  # orange) is drawn ONLY on the linear-rank panel; the log-rank fit
+  # (log10(prom) ~ log10(rank), blue) ONLY on the log-rank panel. The points used
+  # in each regression (rank within [sec_lo, sec_hi], prom <= fit_prom_max) are
+  # ringed, and the panel reports the fit R². No green smoothing curve.
+  lin_fit <- NULL
   lin_lo <- num("linrank_lr_sec_lo"); lin_hi <- num("linrank_lr_sec_hi")
   if (length(lin_lo) == 1 && is.finite(lin_lo) && is.finite(lin_hi)) {
     w <- d$rank >= lin_lo & d$rank <= lin_hi & p <= fit_prom_max
     if (sum(w) >= 2) {
-      ca <- stats::coef(stats::lm(log_prom ~ rank, data = d[w, , drop = FALSE]))
+      m  <- stats::lm(log_prom ~ rank, data = d[w, , drop = FALSE])
+      ca <- stats::coef(m)
       la <- data.frame(rank = seq(1, lin_hi, length.out = 200))
       la$log_prom <- ca[[1]] + ca[[2]] * la$rank
       lr_lfc_lin[kk] <- log10(p[kk]) - (ca[[1]] + ca[[2]] * kk)
-      drop <- data.frame(rank = kk, y = log10(p[kk]), yend = ca[[1]] + ca[[2]] * kk)
-      g <- g +
-        geom_line(data = la, colour = "darkorange2", linewidth = 0.8) +
-        geom_segment(data = drop, aes(x = rank, xend = rank, y = y, yend = yend),
-                     linetype = "dashed", colour = "darkorange2", inherit.aes = FALSE)
+      lin_fit <- list(
+        line = la,
+        used = d[w, , drop = FALSE],
+        drop = data.frame(rank = kk, y = log10(p[kk]), yend = ca[[1]] + ca[[2]] * kk),
+        r2 = summary(m)$r.squared, npts = sum(w))
     }
   }
 
+  log_fit <- NULL
   log_lo <- num("logrank_lr_sec_lo"); log_hi <- num("logrank_lr_sec_hi")
   if (length(log_lo) == 1 && is.finite(log_lo) && is.finite(log_hi)) {
     w <- d$rank >= log_lo & d$rank <= log_hi & p <= fit_prom_max
     if (sum(w) >= 2) {
-      cb <- stats::coef(stats::lm(log_prom ~ log10(rank), data = d[w, , drop = FALSE]))
+      m  <- stats::lm(log_prom ~ log10(rank), data = d[w, , drop = FALSE])
+      cb <- stats::coef(m)
       lb <- data.frame(rank = seq(1, log_hi, length.out = 200))
       lb$log_prom <- cb[[1]] + cb[[2]] * log10(lb$rank)
       lr_lfc_log[kk] <- log10(p[kk]) - (cb[[1]] + cb[[2]] * log10(kk))
-      drop <- data.frame(rank = kk, y = log10(p[kk]), yend = cb[[1]] + cb[[2]] * log10(kk))
-      g <- g +
-        geom_line(data = lb, colour = "steelblue", linewidth = 0.8) +
-        geom_segment(data = drop, aes(x = rank, xend = rank, y = y, yend = yend),
-                     linetype = "dotted", colour = "steelblue", inherit.aes = FALSE)
+      log_fit <- list(
+        line = lb,
+        used = d[w, , drop = FALSE],
+        drop = data.frame(rank = kk, y = log10(p[kk]), yend = cb[[1]] + cb[[2]] * log10(kk)),
+        r2 = summary(m)$r.squared, npts = sum(w))
     }
   }
 
-  # highlight peaks 1 & 2
+  # peaks 1 & 2 highlight (shared)
   pk <- data.frame(rank = c(1, 2), log_prom = log10(p[1:2]))[seq_len(min(2, length(p))), ]
-  g <- g + geom_point(data = pk, aes(rank, log_prom),
-                      colour = "firebrick", size = 2.4)
 
   # y range from the data points; restrict to ranks <= max_rank when set
   dv <- if (is.null(max_rank)) d else d[d$rank <= max_rank, , drop = FALSE]
   yr <- range(dv$log_prom, na.rm = TRUE)
   xr <- c(1, if (is.null(max_rank)) max(d$rank) else max_rank)
-  # stored pipeline values (authoritative): bestfit lr fold change + region counts
   bf1 <- num("peak1_bestfit_lr_fc"); bf2 <- num("peak2_bestfit_lr_fc")
   n_reg_lin <- num("linrank_n_regions"); n_reg_log <- num("logrank_n_regions")
 
-  # `g` now carries the points + both lr lines + spline + peaks but no x-scale.
-  # Render it twice — once in linear-rank x, once in log-rank x — so each lr line
-  # (orange = linear-rank fit, blue = log-rank fit) appears straight in its own
-  # space. The linear-rank panel carries the full metric subtitle.
-  sub_full <- sprintf(
-    "lr_fc(refit) p1 lin=%.2f log=%.2f  p2 lin=%.2f log=%.2f | bestfit p1=%.2f p2=%.2f | n_regions lin=%s log=%s",
-    lr_lfc_lin[1], lr_lfc_log[1], lr_lfc_lin[2], lr_lfc_log[2], bf1, bf2,
-    ifelse(is.finite(n_reg_lin), as.character(round(n_reg_lin)), "NA"),
-    ifelse(is.finite(n_reg_log), as.character(round(n_reg_log)), "NA"))
-  g_lin_rank <- g +
+  # base scatter (+ optional gamma projection), shared by both panels
+  g0 <- ggplot(d, aes(rank, log_prom)) +
+    geom_point(size = 1.3, colour = "grey40")
+  if (!is.null(gproj))
+    g0 <- g0 + geom_line(data = gproj, colour = "purple", linewidth = 0.8)
+
+  # add one lr fit (+ its used-points ring + drop-lines) to a base plot
+  add_fit <- function(g, fit, col, lty) {
+    if (is.null(fit)) return(g)
+    g +
+      geom_point(data = fit$used, aes(rank, log_prom), shape = 21,
+                 colour = col, fill = NA, size = 3, stroke = 0.7) +
+      geom_line(data = fit$line, colour = col, linewidth = 0.8) +
+      geom_segment(data = fit$drop, aes(x = rank, xend = rank, y = y, yend = yend),
+                   linetype = lty, colour = col, inherit.aes = FALSE)
+  }
+  r2txt <- function(fit) if (is.null(fit)) "NA"
+                         else sprintf("R²=%.3f, n=%d pts ringed", fit$r2, fit$npts)
+
+  g_lin_rank <- add_fit(g0, lin_fit, "darkorange2", "dashed") +
+    geom_point(data = pk, aes(rank, log_prom), colour = "firebrick", size = 2.4) +
     coord_cartesian(xlim = xr, ylim = yr) +
-    labs(x = "peak rank (linear)", y = "log10(prom) [UMI/µm²]",
-         title = NULL, subtitle = sub_full) +
+    labs(x = "peak rank (linear)", y = "log10(prom) [UMI/µm²]", title = NULL,
+         subtitle = sprintf("linear-rank lr fit  %s | fc p1=%.2f p2=%.2f | n_regions=%s",
+                            r2txt(lin_fit), lr_lfc_lin[1], lr_lfc_lin[2],
+                            ifelse(is.finite(n_reg_lin), as.character(round(n_reg_lin)), "NA"))) +
     theme_minimal()
-  g_log_rank <- g +
+
+  g_log_rank <- add_fit(g0, log_fit, "steelblue", "dotted") +
+    geom_point(data = pk, aes(rank, log_prom), colour = "firebrick", size = 2.4) +
     scale_x_log10() +
     coord_cartesian(xlim = xr, ylim = yr) +
-    labs(x = "peak rank (log)", y = "log10(prom) [UMI/µm²]",
-         title = NULL, subtitle = "log-rank x-axis") +
+    labs(x = "peak rank (log)", y = "log10(prom) [UMI/µm²]", title = NULL,
+         subtitle = sprintf("log-rank lr fit  %s | fc p1=%.2f p2=%.2f | n_regions=%s",
+                            r2txt(log_fit), lr_lfc_log[1], lr_lfc_log[2],
+                            ifelse(is.finite(n_reg_log), as.character(round(n_reg_log)), "NA"))) +
     theme_minimal()
   main_panels <- list(g_lin_rank, g_log_rank)
 

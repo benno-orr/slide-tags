@@ -13,7 +13,7 @@ puck_cb_kde_3d <- function(cell_id, bead_df,
                            phi = 25,
                            clip_bottom = 0.05,
                            wire = FALSE, wire_n = 30, wire_col = "grey30",
-                           n_peaks = 9, peak_cex = 1.6, peak_labels = TRUE,
+                           n_peaks = 9, peak_text_cex = 0.9,
                            title = NULL) {
   require(viridisLite)
 
@@ -55,15 +55,15 @@ puck_cb_kde_3d <- function(cell_id, bead_df,
     cut(Zcolor, breaks = 256, include.lowest = TRUE)
   ]
 
-  # peaks 1..n_peaks from the profiles table, positioned on the surface (z via
-  # bilinear interpolation of Z at the peak xy), coloured by prominence rank.
+  # peaks 1..n_peaks from the profiles table; labelled at the BASE of each peak
+  # (the surface floor, not the apex) with the prominence rank in red text.
   peaks <- NULL
   if (!is.null(profiles_df)) {
     row <- .get_cell_row(profiles_df, cell_id, suffix)
     if (!is.null(row)) {
       K <- seq_len(n_peaks)
-      cx <- paste0("peak", K, "_x"); cy <- paste0("peak", K, "_y")
-      have <- cx %in% names(row) & cy %in% names(row)
+      have <- paste0("peak", K, "_x") %in% names(row) &
+              paste0("peak", K, "_y") %in% names(row)
       K <- K[have]
       if (length(K) > 0) {
         px <- suppressWarnings(as.numeric(row[1, paste0("peak", K, "_x")]))
@@ -71,22 +71,8 @@ puck_cb_kde_3d <- function(cell_id, bead_df,
         ok <- is.finite(px) & is.finite(py) &
               px >= min(gx) & px <= max(gx) & py >= min(gy) & py <= max(gy)
         K <- K[ok]; px <- px[ok]; py <- py[ok]
-        if (length(K) > 0) {
-          interp_z <- function(xq, yq) {
-            ix <- pmin(pmax(findInterval(xq, gx), 1), length(gx) - 1)
-            iy <- pmin(pmax(findInterval(yq, gy), 1), length(gy) - 1)
-            tx <- (xq - gx[ix]) / (gx[ix + 1] - gx[ix])
-            ty <- (yq - gy[iy]) / (gy[iy + 1] - gy[iy])
-            Z[cbind(ix, iy)]         * (1 - tx) * (1 - ty) +
-            Z[cbind(ix + 1, iy)]     *      tx  * (1 - ty) +
-            Z[cbind(ix, iy + 1)]     * (1 - tx) *      ty  +
-            Z[cbind(ix + 1, iy + 1)] *      tx  *      ty
-          }
-          # plasma by prom rank: rank 1 (highest prom) = brightest
-          pal <- rev(viridisLite::plasma(n_peaks))
-          peaks <- data.frame(rank = K, x = px, y = py,
-                              z = interp_z(px, py), col = pal[K])
-        }
+        if (length(K) > 0)
+          peaks <- data.frame(rank = K, x = px, y = py)
       }
     }
   }
@@ -134,15 +120,13 @@ puck_cb_kde_3d <- function(cell_id, bead_df,
                                     border = wire_col, lwd = 0.4), pargs))
     }
 
-    # mark peaks 1..n on the surface (lifted slightly so they sit on top)
+    # label peaks 1..n with their rank in red text at the BASE of each peak
+    # (anchored to the surface floor, not the apex)
     if (!is.null(peaks) && nrow(peaks) > 0) {
-      lift <- 0.03 * diff(range(Z, finite = TRUE))
-      tp <- proj3d(peaks$x, peaks$y, peaks$z + lift, pmat)
-      points(tp$x, tp$y, pch = 21, bg = peaks$col, col = "black",
-             lwd = 0.7, cex = peak_cex)
-      if (peak_labels)
-        text(tp$x, tp$y, labels = peaks$rank, pos = 3, offset = 0.25,
-             cex = 0.55, col = "grey15")
+      z_base <- min(Z, finite = TRUE)
+      tp <- proj3d(peaks$x, peaks$y, rep(z_base, nrow(peaks)), pmat)
+      text(tp$x, tp$y, labels = peaks$rank, cex = peak_text_cex,
+           col = "red", font = 2)
     }
   }
 
