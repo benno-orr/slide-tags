@@ -7,6 +7,8 @@ puck_cb_scatter = function(cell_id, bead_df, suffix = "-1", eps = 50, title = NU
 
   cb_col <- if ("cell_bc" %in% names(bead_df)) "cell_bc" else "cell_bc_10x"
   df <- bead_df[bead_df[[cb_col]] == cb, , drop = FALSE]
+  # drop beads with no coords (matches map_cells.py, which never positions them)
+  df <- df[is.finite(df$x_um) & is.finite(df$y_um), , drop = FALSE]
   if (nrow(df) == 0) return(ggplot() + ggtitle(paste0(cell_id, " — no beads")))
 
   xy <- as.matrix(df[, c("x_um", "y_um")])
