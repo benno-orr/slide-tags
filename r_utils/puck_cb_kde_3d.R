@@ -23,6 +23,8 @@ puck_cb_kde_3d <- function(cell_id, bead_df,
 
   df <- bead_df[bead_df[[cb_col]] == cb, , drop = FALSE]
   df <- df[is.finite(df$x_um) & is.finite(df$y_um), , drop = FALSE]
+  # drop (near-)homopolymer beads so the surface matches map_cells.py's KDE peaks
+  df <- .drop_homopolymer_beads(df)
 
   x <- df$x_um
   y <- df$y_um

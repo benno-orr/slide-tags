@@ -1,7 +1,8 @@
 puck_cb_scatter = function(cell_id, bead_df, profiles_df = NULL,
                            mode = c("raw", "norm"),
                            suffix = "-1", eps = 50, title = NULL,
-                           min_samples = c(10, 9, 8), norm_to = 1000) {
+                           min_samples = c(10, 9, 8), norm_to = 1000,
+                           drop_homopolymer = TRUE, cbar_h = 1.0) {
   require(dbscan)
   mode <- match.arg(mode)
   # bead_df: pair step's cell-barcode_coords.csv with columns cell_bc_10x,
@@ -17,6 +18,9 @@ puck_cb_scatter = function(cell_id, bead_df, profiles_df = NULL,
   df <- bead_df[bead_df[[cb_col]] == cb, , drop = FALSE]
   # drop beads with no coords (matches map_cells.py, which never positions them)
   df <- df[is.finite(df$x_um) & is.finite(df$y_um), , drop = FALSE]
+  # drop (near-)homopolymer beads (poly-G etc.) exactly as map_cells.py does, so
+  # the scatter clusters match the KDE peaks (which are computed post-filter).
+  if (drop_homopolymer) df <- .drop_homopolymer_beads(df)
   if (nrow(df) == 0) return(ggplot() + ggtitle(paste0(cell_id, " — no beads")))
 
   xy <- as.matrix(df[, c("x_um", "y_um")])
@@ -101,6 +105,10 @@ puck_cb_scatter = function(cell_id, bead_df, profiles_df = NULL,
   d2 <- ord_umi(df[df$cluster_group == "c2", , drop = FALSE])
   d1 <- ord_umi(df[df$cluster_group == "c1", , drop = FALSE])
 
+  # short colourbars so the three stacked legends don't run past the plot panel
+  cbar_guide <- guide_colourbar(barheight = grid::unit(cbar_h, "cm"),
+                                barwidth  = grid::unit(0.28, "cm"))
+
   # layer order: c0 background → c2 → c1 foreground; each group its own colourbar
   p <- ggplot()
 
@@ -108,7 +116,7 @@ puck_cb_scatter = function(cell_id, bead_df, profiles_df = NULL,
     p <- p +
       geom_point(data = d0, aes(x_um, y_um, colour = nUMI), size = 1.8) +
       scale_colour_gradient(low = "grey85", high = "grey25", trans = "log10",
-                            name = "c0 nUMI",
+                            name = "c0 nUMI", guide = cbar_guide,
                             breaks = int_log_breaks,
                             labels = scales::label_number(accuracy = 1)) +
       ggnewscale::new_scale_colour()
@@ -117,7 +125,7 @@ puck_cb_scatter = function(cell_id, bead_df, profiles_df = NULL,
     p <- p +
       geom_point(data = d2, aes(x_um, y_um, colour = nUMI), size = 1.8) +
       viridis::scale_colour_viridis(option = "plasma", trans = "log10",
-                                    name = "c2+ nUMI",
+                                    name = "c2+ nUMI", guide = cbar_guide,
                                     breaks = int_log_breaks,
                                     labels = scales::label_number(accuracy = 1)) +
       ggnewscale::new_scale_colour()
@@ -126,7 +134,7 @@ puck_cb_scatter = function(cell_id, bead_df, profiles_df = NULL,
     p <- p +
       geom_point(data = d1, aes(x_um, y_um, colour = nUMI), size = 1.8) +
       viridis::scale_colour_viridis(option = "viridis", trans = "log10",
-                                    name = "c1 nUMI",
+                                    name = "c1 nUMI", guide = cbar_guide,
                                     breaks = int_log_breaks,
                                     labels = scales::label_number(accuracy = 1))
 
@@ -146,10 +154,14 @@ puck_cb_scatter = function(cell_id, bead_df, profiles_df = NULL,
   p +
     coord_fixed() +
     theme(
-    axis.title = element_blank(),
-    axis.line = element_blank(),
-    axis.text = element_blank(),
-    axis.ticks = element_blank()) +
-
+      axis.title = element_blank(),
+      axis.line = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      legend.title = element_text(size = 7),
+      legend.text = element_text(size = 6),
+      legend.key.height = grid::unit(cbar_h, "cm"),
+      legend.spacing.y = grid::unit(1, "pt"),
+      legend.box.spacing = grid::unit(2, "pt")) +
     ggtitle(title)
 }
