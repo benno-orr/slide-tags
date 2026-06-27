@@ -4,3 +4,4 @@
 *.csv.bak*
 __pycache__/
 *.pyc
+scratch/plots/
