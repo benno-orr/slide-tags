@@ -1,0 +1,278 @@
+# log10(prominence) vs peak rank, with the pipeline's leftmost-line fit(s)
+# overlaid. Slope/intercept are not stored, so each line is re-fit from the prom
+# values within its stored rank window ({linrank,logrank}_lr_sec_lo/_sec_hi),
+# reproducing map_cells.py. peakK_*_lr_fc = vertical gap from the line up to peak
+# K (dashed = linear-rank, dotted = log-rank drop-lines). When show_regions, two
+# extra panels reproduce the region-counting metric ({linrank,logrank}_n_regions):
+# the smoothed-log-prom derivative + its spline, with detected transition minima.
+# Columns expected (cell_coords.csv, map_cells.py): peakK_prom, peakK_height,
+# {linrank,logrank}_lr_sec_lo/_sec_hi, peak{1,2}_bestfit_lr_fc, {linrank,logrank}_n_regions.
+# Depends: .get_cell_row(), .prom_region_fit().
+puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
+                           fit_prom_max = 0.1,
+                           max_rank = NULL, show_fit = TRUE,
+                           fit_bg = FALSE, bg_prom_max = 0.1,
+                           fit_gamma = FALSE,
+                           gamma_model = c("mixture", "single", "powerlaw"),
+                           spline_spar = 0.45,
+                           show_regions = TRUE, region_min_prom = 0.05) {
+  gamma_model <- match.arg(gamma_model)
+  row <- .get_cell_row(profiles_df, cell_id, suffix)
+  if (is.null(row)) return(ggplot() + ggtitle(paste0(cell_id, " — not in table")))
+
+  prom_cols <- grep("^peak[0-9]+_prom$", names(row), value = TRUE)
+  prom_cols <- prom_cols[order(as.integer(gsub("[^0-9]", "", prom_cols)))]
+  p <- as.numeric(row[1, prom_cols])
+  keep <- is.finite(p) & p > 0
+  p <- p[keep]
+  if (length(p) == 0) return(ggplot() + ggtitle(paste0(cell_id, " — no peaks")))
+
+  d <- data.frame(rank = seq_along(p), log_prom = log10(p))
+
+  # gamma background model: fit a gamma to the background prominences
+  # (rank > 2, prom <= bg_prom_max), project the expected prominence-by-rank via
+  # the order-statistic plotting position qgamma(1 - (rank-0.5)/N), and build a
+  # linearised view (observed vs gamma-expected prominence) where the background
+  # falls on the 1:1 line and real peaks sit above it.
+  gproj <- glin <- gpar <- exp_all <- NULL
+  if (fit_gamma) {
+    bgv <- p[seq_along(p) > 2 & p <= bg_prom_max]
+    N  <- length(p)
+    pp <- pmin(pmax(1 - (d$rank - 0.5) / N, 1e-7), 1 - 1e-9)
+    if (gamma_model == "single" && length(bgv) >= 10) {
+      gf <- tryCatch(suppressWarnings(MASS::fitdistr(bgv, "gamma")),
+                     error = function(e) NULL)
+      if (!is.null(gf)) {
+        sh <- gf$estimate[["shape"]]; rt <- gf$estimate[["rate"]]
+        exp_all <- qgamma(pp, sh, rt)
+        gpar <- sprintf("gamma: k=%.2f rate=%.0f", sh, rt)
+      }
+    } else if (gamma_model == "mixture" && length(bgv) >= 30) {
+      # gamma mixture, #components auto-selected by BIC over k = 1..3
+      n_bg <- length(bgv)
+      fit_k <- function(k) {
+        if (k == 1) {
+          gf <- tryCatch(suppressWarnings(MASS::fitdistr(bgv, "gamma")),
+                         error = function(e) NULL)
+          if (is.null(gf)) return(NULL)
+          list(k = 1, lam = 1, shapes = gf$estimate[["shape"]],
+               scales = 1 / gf$estimate[["rate"]],
+               bic = -2 * gf$loglik + log(n_bg) * 2)
+        } else {
+          mm <- tryCatch(suppressWarnings(
+                  mixtools::gammamixEM(bgv, k = k, maxit = 400, verb = FALSE)),
+                  error = function(e) NULL)
+          if (is.null(mm) || is.null(mm$loglik) || !is.finite(mm$loglik)) return(NULL)
+          list(k = k, lam = mm$lambda, shapes = mm$gamma.pars[1, ],
+               scales = mm$gamma.pars[2, ],
+               bic = -2 * mm$loglik + log(n_bg) * (3 * k - 1))
+        }
+      }
+      cands <- Filter(Negate(is.null), lapply(1:3, fit_k))
+      if (length(cands)) {
+        ms <- cands[[which.min(sapply(cands, `[[`, "bic"))]]
+        xs <- 10^seq(log10(min(bgv) / 10), log10(max(p) * 2), length.out = 4000)
+        Fx <- Reduce(`+`, lapply(seq_along(ms$lam), function(j)
+                ms$lam[j] * pgamma(xs, shape = ms$shapes[j], scale = ms$scales[j])))
+        exp_all <- approx(Fx, xs, xout = pp, rule = 2)$y
+        gpar <- sprintf("gamma mix (BIC k=%d): w=%s k=%s", ms$k,
+                        paste(sprintf("%.2f", ms$lam), collapse = "/"),
+                        paste(sprintf("%.1f", ms$shapes), collapse = "/"))
+      }
+    } else if (gamma_model == "powerlaw" && length(bgv) >= 10) {
+      # Pareto type I (xmin = min(bg); MLE alpha) — a straight line in log-log
+      # rank-prominence. order-stat quantile = xmin * (1 - pp)^(-1/alpha).
+      xmin <- min(bgv); s <- sum(log(bgv / xmin))
+      if (is.finite(s) && s > 0) {
+        alpha <- length(bgv) / s
+        exp_all <- xmin * (1 - pp)^(-1 / alpha)
+        gpar <- sprintf("power law: alpha=%.2f xmin=%.1e", alpha, xmin)
+      }
+    }
+    if (!is.null(exp_all)) {
+      gproj <- data.frame(rank = d$rank, log_prom = log10(pmax(exp_all, 1e-300)))
+      glin  <- data.frame(rank = d$rank, obs = p, exp = exp_all)
+    }
+  }
+
+  # peak-vs-gamma residual z (source of the gamma_z metric): residual of each
+  # point from the gamma line in log space, scaled by the MAD of the background
+  # residuals (rank > 2, 1e-5 <= prom <= bg_prom_max). computed here so the
+  # main prom-rank plot can annotate peak1_gamma_z.
+  resid <- bg_m <- NULL; mad_bg <- NA_real_
+  if (!is.null(glin)) {
+    resid  <- log10(glin$obs) - log10(glin$exp)
+    bg_m   <- glin$rank > 2 & glin$obs <= bg_prom_max & glin$obs >= 1e-5
+    mad_bg <- if (sum(bg_m) >= 5) mad(resid[bg_m]) else NA_real_
+    glin$z <- resid / mad_bg
+  }
+
+  g <- ggplot(d, aes(rank, log_prom)) +
+    geom_point(size = 1.3, colour = "grey40")
+  if (!is.null(gproj))
+    g <- g + geom_line(data = gproj, colour = "purple", linewidth = 0.8)
+
+  # spline fit to the log-log curve; its 1st derivative = local power-law slope
+  # (d log prom / d log rank), 2nd derivative = curvature (zero-crossings mark
+  # the inflection points).
+  sl <- data.frame(rank = d$rank, lr = log10(d$rank), lp = d$log_prom)
+  sl <- sl[is.finite(sl$lr) & is.finite(sl$lp) &
+           sl$rank > 5 & sl$rank <= 150, , drop = FALSE]
+  fitc <- NULL
+  if (nrow(sl) >= 5 && length(unique(sl$lr)) >= 4) {
+    ssp <- stats::smooth.spline(sl$lr, sl$lp, spar = spline_spar)
+    lrg <- seq(min(sl$lr), max(sl$lr), length.out = 400)
+    fitc <- data.frame(rank = 10^lrg,
+                       log_prom = predict(ssp, lrg)$y,
+                       d1 = predict(ssp, lrg, deriv = 1)$y,
+                       d2 = predict(ssp, lrg, deriv = 2)$y)
+    g <- g + geom_line(data = fitc, aes(rank, log_prom),
+                       colour = "forestgreen", linewidth = 0.8)
+  }
+
+  # leftmost-line ("lr") fits, re-fit from each line's STORED rank window so the
+  # overlay reproduces map_cells.py exactly. Two rank spaces, drawn for compare:
+  #   orange = linear-rank   log10(prom) ~ rank         (linrank_lr_*)
+  #   blue   = log-rank      log10(prom) ~ log10(rank)  (logrank_lr_*)
+  # window cols {linrank,logrank}_lr_sec_lo/_sec_hi; prom > fit_prom_max excluded.
+  # peakK_*_lr_fc = vertical gap from the line (projected to rank K) up to peak K;
+  # dashed = linear-rank drop-line, dotted = log-rank drop-line.
+  num <- function(nm) suppressWarnings(as.numeric(row[[nm]][1]))
+  kk  <- seq_len(min(2, length(p)))
+  lr_lfc_lin <- lr_lfc_log <- rep(NA_real_, 2)
+
+  lin_lo <- num("linrank_lr_sec_lo"); lin_hi <- num("linrank_lr_sec_hi")
+  if (length(lin_lo) == 1 && is.finite(lin_lo) && is.finite(lin_hi)) {
+    w <- d$rank >= lin_lo & d$rank <= lin_hi & p <= fit_prom_max
+    if (sum(w) >= 2) {
+      ca <- stats::coef(stats::lm(log_prom ~ rank, data = d[w, , drop = FALSE]))
+      la <- data.frame(rank = seq(1, lin_hi, length.out = 200))
+      la$log_prom <- ca[[1]] + ca[[2]] * la$rank
+      lr_lfc_lin[kk] <- log10(p[kk]) - (ca[[1]] + ca[[2]] * kk)
+      drop <- data.frame(rank = kk, y = log10(p[kk]), yend = ca[[1]] + ca[[2]] * kk)
+      g <- g +
+        geom_line(data = la, colour = "darkorange2", linewidth = 0.8) +
+        geom_segment(data = drop, aes(x = rank, xend = rank, y = y, yend = yend),
+                     linetype = "dashed", colour = "darkorange2", inherit.aes = FALSE)
+    }
+  }
+
+  log_lo <- num("logrank_lr_sec_lo"); log_hi <- num("logrank_lr_sec_hi")
+  if (length(log_lo) == 1 && is.finite(log_lo) && is.finite(log_hi)) {
+    w <- d$rank >= log_lo & d$rank <= log_hi & p <= fit_prom_max
+    if (sum(w) >= 2) {
+      cb <- stats::coef(stats::lm(log_prom ~ log10(rank), data = d[w, , drop = FALSE]))
+      lb <- data.frame(rank = seq(1, log_hi, length.out = 200))
+      lb$log_prom <- cb[[1]] + cb[[2]] * log10(lb$rank)
+      lr_lfc_log[kk] <- log10(p[kk]) - (cb[[1]] + cb[[2]] * log10(kk))
+      drop <- data.frame(rank = kk, y = log10(p[kk]), yend = cb[[1]] + cb[[2]] * log10(kk))
+      g <- g +
+        geom_line(data = lb, colour = "steelblue", linewidth = 0.8) +
+        geom_segment(data = drop, aes(x = rank, xend = rank, y = y, yend = yend),
+                     linetype = "dotted", colour = "steelblue", inherit.aes = FALSE)
+    }
+  }
+
+  # highlight peaks 1 & 2
+  pk <- data.frame(rank = c(1, 2), log_prom = log10(p[1:2]))[seq_len(min(2, length(p))), ]
+  g <- g + geom_point(data = pk, aes(rank, log_prom),
+                      colour = "firebrick", size = 2.4)
+
+  # y range from the data points; restrict to ranks <= max_rank when set
+  dv <- if (is.null(max_rank)) d else d[d$rank <= max_rank, , drop = FALSE]
+  yr <- range(dv$log_prom, na.rm = TRUE)
+  xr <- c(1, if (is.null(max_rank)) max(d$rank) else max_rank)
+  xsc <- list(scale_x_log10(), coord_cartesian(xlim = xr))
+  # stored pipeline values (authoritative): bestfit lr fold change + region counts
+  bf1 <- num("peak1_bestfit_lr_fc"); bf2 <- num("peak2_bestfit_lr_fc")
+  n_reg_lin <- num("linrank_n_regions"); n_reg_log <- num("logrank_n_regions")
+  g <- g +
+    scale_x_log10() +
+    coord_cartesian(xlim = xr, ylim = yr) +
+    labs(x = "peak rank (log)", y = "log10(prominence)  [UMI/µm²]",
+         title = NULL,
+         subtitle = sprintf(
+           "lr_fc(refit) p1 lin=%.2f log=%.2f  p2 lin=%.2f log=%.2f | bestfit p1=%.2f p2=%.2f | n_regions lin=%s log=%s",
+           lr_lfc_lin[1], lr_lfc_log[1], lr_lfc_lin[2], lr_lfc_log[2],
+           bf1, bf2,
+           ifelse(is.finite(n_reg_lin), as.character(round(n_reg_lin)), "NA"),
+           ifelse(is.finite(n_reg_log), as.character(round(n_reg_log)), "NA"))) +
+    theme_minimal()
+
+  # ---- region metric panels: reproduce map_cells.py region counting so the
+  # ---- transitions behind {linrank,logrank}_n_regions are visible ----------
+  reg_panels <- list()
+  if (show_regions) {
+    rf_lin <- .prom_region_fit(p, "linrank", region_min_prom)
+    rf_log <- .prom_region_fit(p, "logrank", region_min_prom)
+    mk_reg <- function(rf, lab, stored) {
+      if (is.null(rf)) return(NULL)
+      df <- rf$df; mins <- df[df$is_min, , drop = FALSE]
+      pp <- ggplot(df, aes(rank, spline)) +
+        geom_hline(yintercept = 0, colour = "grey85") +
+        geom_line(aes(y = deriv), colour = "grey70", linewidth = 0.4) +
+        geom_line(colour = "forestgreen", linewidth = 0.7)
+      if (nrow(mins) > 0)
+        pp <- pp + geom_point(data = mins, colour = "firebrick", size = 2.2) +
+          geom_vline(data = mins, aes(xintercept = rank),
+                     linetype = "dotted", colour = "firebrick")
+      pp + scale_x_log10() + coord_cartesian(xlim = xr) +
+        labs(x = "peak rank (log)", y = "d(smooth logP)/dx",
+             subtitle = sprintf("%s: transitions(refit)=%d  stored n_regions=%s",
+                                 lab, rf$n_transitions,
+                                 ifelse(is.finite(stored), as.character(round(stored)), "NA"))) +
+        theme_minimal()
+    }
+    reg_panels <- Filter(Negate(is.null),
+                         list(mk_reg(rf_lin, "linrank", n_reg_lin),
+                              mk_reg(rf_log, "logrank", n_reg_log)))
+  }
+
+  # no gamma fit: show the prom-rank plot (+ region panels) with the lr fits
+  if (is.null(glin)) {
+    if (length(reg_panels) == 0) return(g)
+    return(patchwork::wrap_plots(c(list(g), reg_panels), ncol = 1,
+                                 heights = c(2, rep(1, length(reg_panels)))))
+  }
+
+  # deviation z-score (computed above): residual from the gamma line in log
+  # space, scaled by the MAD of the background residuals. tight gamma fit
+  # (small bg MAD) => larger z for the same fold; loose fit => smaller z.
+  r12 <- seq_len(min(2, nrow(glin)))
+  zsub <- sprintf("bg resid mad=%.3f   p1 z=%.1f   p2 z=%.1f",
+                  mad_bg, glin$z[1], if (length(r12) > 1) glin$z[2] else NA)
+  # which model/combo was fitted (e.g. "gamma mix (BIC k=3): w=.. k=..") on top line
+  g_title <- if (!is.null(gpar)) gpar else NULL
+
+  pk_lin <- glin[r12, , drop = FALSE]
+  g_lin <- ggplot(glin, aes(exp, obs)) +
+    geom_abline(slope = 1, intercept = 0, colour = "purple", linewidth = 0.8) +
+    geom_point(size = 1, colour = "grey40") +
+    geom_point(data = pk_lin, colour = "firebrick", size = 2.4) +
+    geom_text(data = pk_lin, aes(label = sprintf("z=%.1f", z)),
+              hjust = -0.2, size = 3, colour = "firebrick") +
+    scale_x_log10() + scale_y_log10() +
+    labs(x = "model-expected prominence", y = "observed prominence",
+         title = g_title, subtitle = zsub) +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 9, face = "plain", colour = "grey20"))
+
+  # distribution of the background residuals that MAD summarises, with the ±MAD
+  # band (blue dashed), the gamma line at 0 (purple) and peaks 1/2 (firebrick).
+  rd <- data.frame(resid = resid[bg_m])
+  p_resid <- ggplot(rd, aes(resid)) +
+    geom_histogram(aes(y = after_stat(density)), bins = 40,
+                   fill = "grey85", colour = NA) +
+    geom_density(colour = "grey30", linewidth = 0.8, adjust = 1.2) +
+    geom_vline(xintercept = 0, colour = "purple", linewidth = 0.7) +
+    geom_vline(xintercept = c(-mad_bg, mad_bg), colour = "steelblue",
+               linetype = "dashed") +
+    geom_vline(xintercept = resid[r12], colour = "firebrick", linewidth = 0.7) +
+    labs(x = "log10(obs) - log10(gamma exp)", y = "density",
+         subtitle = "bg residuals; dashed = ±MAD, red = peaks") +
+    theme_minimal()
+
+  panels  <- c(list(g), reg_panels, list(g_lin, p_resid))
+  heights <- c(2, rep(1, length(reg_panels)), 2, 1)
+  patchwork::wrap_plots(panels, ncol = 1, heights = heights)
+}
