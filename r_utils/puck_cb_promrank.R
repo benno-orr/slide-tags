@@ -15,7 +15,8 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
                            fit_gamma = FALSE,
                            gamma_model = c("mixture", "single", "powerlaw"),
                            spline_spar = 0.45,
-                           show_regions = TRUE, region_min_prom = 0.05) {
+                           show_regions = TRUE, region_min_prom = 0.05,
+                           region_top_exclude = 3) {
   gamma_model <- match.arg(gamma_model)
   row <- .get_cell_row(profiles_df, cell_id, suffix)
   if (is.null(row)) return(ggplot() + ggtitle(paste0(cell_id, " — not in table")))
@@ -200,8 +201,8 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
   # ---- transitions behind {linrank,logrank}_n_regions are visible ----------
   reg_panels <- list()
   if (show_regions) {
-    rf_lin <- .prom_region_fit(p, "linrank", region_min_prom)
-    rf_log <- .prom_region_fit(p, "logrank", region_min_prom)
+    rf_lin <- .prom_region_fit(p, "linrank", region_min_prom, region_top_exclude)
+    rf_log <- .prom_region_fit(p, "logrank", region_min_prom, region_top_exclude)
     mk_reg <- function(rf, lab, stored) {
       if (is.null(rf)) return(NULL)
       df <- rf$df; mins <- df[df$is_min, , drop = FALSE]

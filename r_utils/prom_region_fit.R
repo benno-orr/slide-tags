@@ -14,13 +14,14 @@
 # region counting on the log10(prominence)-vs-rank curve — R analogue of
 # map_cells.py `_count_regions`. Steps: smooth log-prom with a [.25,.5,.25]
 # kernel, take d/dx in the chosen rank space (linrank: x=rank; logrank: x=log10
-# rank), smooth the derivative with a two-neighbour moving average (no spline),
-# then count local minima whose dip-prominence (drop from the higher flanking
-# ridge) >= min_prom. transitions = those minima; regions = transitions + 1.
-# Returns the per-rank fit frame + the two counts. (NB: map_cells.py itself uses
-# a UnivariateSpline here; this panel deliberately uses the simpler smoother.)
+# rank), fit a smoothing spline to the derivative — EXCLUDING the top
+# `top_exclude` ranked points (the dominant peaks), whose steep initial drop
+# would otherwise dominate the fit — then count local minima of the spline whose
+# dip-prominence (drop from the higher flanking ridge) >= min_prom. transitions =
+# those minima; regions = transitions + 1. Returns the per-rank fit frame (spline
+# is NA over the excluded ranks) + the two counts.
 .prom_region_fit <- function(prom, space = c("linrank", "logrank"),
-                             min_prom = 0.05) {
+                             min_prom = 0.05, top_exclude = 3) {
   space <- match.arg(space)
   lp <- log10(prom)
   n  <- length(lp)
@@ -39,14 +40,19 @@
   g[1] <- (sm[2] - sm[1]) / (x[2] - x[1])
   g[n] <- (sm[n] - sm[n - 1]) / (x[n] - x[n - 1])
 
-  # smooth the derivative with a two-neighbour moving average (no spline)
-  sp <- .smooth_window(g, nbr = 2)
+  # spline-smooth the derivative, fit on ranks > top_exclude only
+  fit_idx <- which(rank > top_exclude)
+  if (length(fit_idx) < 5) return(NULL)
+  sp <- rep(NA_real_, n)
+  ss <- tryCatch(stats::smooth.spline(x[fit_idx], g[fit_idx]), error = function(e) NULL)
+  sp[fit_idx] <- if (is.null(ss)) g[fit_idx] else stats::predict(ss, x[fit_idx])$y
 
-  # local minima with dip-prominence >= min_prom
+  # local minima of the spline (over the fitted ranks) with dip-prominence >= min_prom
   is_min <- rep(FALSE, n)
-  if (n >= 3) for (i in 2:(n - 1)) {
-    if (sp[i] < sp[i - 1] && sp[i] <= sp[i + 1]) {
-      dip <- min(max(sp[1:(i - 1)]), max(sp[i:n])) - sp[i]
+  lo <- min(fit_idx); hi <- max(fit_idx)
+  if (hi - lo >= 2) for (i in (lo + 1):(hi - 1)) {
+    if (is.finite(sp[i]) && sp[i] < sp[i - 1] && sp[i] <= sp[i + 1]) {
+      dip <- min(max(sp[lo:(i - 1)]), max(sp[i:hi])) - sp[i]
       if (is.finite(dip) && dip >= min_prom) is_min[i] <- TRUE
     }
   }
