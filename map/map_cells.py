@@ -83,6 +83,7 @@ LO_FIT, WIN_FIT, CUT_FIT = 3, 4, 0.80   # leftmost-line: peaks 1-2 excluded, 4-p
 FIT_PROM_MAX_LR = 0.1                     # lr/lr_h fit: peaks above this prom excluded
 DEFAULT_REGION_MIN_PROM = 0.05           # min dip depth of a derivative local minimum (transition)
 DEFAULT_REGION_SPLINE_S = -1.0           # smoothing-spline s for the derivative (<0 → scipy default)
+DEFAULT_HOTBEAD_FRAC = 0.5               # cluster flagged hot-bead if its top bead has >= this UMI fraction
 
 PARAMS = dict()   # filled at runtime from CLI
 
@@ -262,8 +263,12 @@ def _clusters_from_labels(labels, x, y, u, w):
     ordered = sorted(sizes, key=sizes.get, reverse=True)
     def mk(lab):
         m = (labels == lab)
-        return dict(n_beads=int(m.sum()), umi=float(u[m].sum()),
-                    cx=float(x[m].mean()), cy=float(y[m].mean()))
+        um = u[m]; us = float(um.sum())
+        # topbead_frac = fraction of the cluster's UMI from its single largest bead.
+        # ~1.0 => a "hot bead" (one bead is the whole cluster), not a real localization.
+        return dict(n_beads=int(m.sum()), umi=us,
+                    cx=float(x[m].mean()), cy=float(y[m].mean()),
+                    topbead_frac=(float(um.max()) / us if us > 0 else np.nan))
     clusters = [mk(lab) for lab in ordered[:N_DBSCAN_CLUSTERS]]
     rest = ordered[N_DBSCAN_CLUSTERS:]
     if rest:
@@ -544,10 +549,15 @@ def one_cell(cb, x, y, u):
         out[f"{mode}_dbscan_clusters"]  = int(r["n_clusters"])
         for k in range(N_DBSCAN_CLUSTERS):
             c = clusters[k] if k < len(clusters) else None
-            out[f"{mode}_c{k+1}_x"]       = c["cx"] if c else np.nan
-            out[f"{mode}_c{k+1}_y"]       = c["cy"] if c else np.nan
-            out[f"{mode}_c{k+1}_n_beads"] = c["n_beads"] if c else 0
-            out[f"{mode}_c{k+1}_umi"]     = c["umi"] if c else 0.0
+            out[f"{mode}_c{k+1}_x"]            = c["cx"] if c else np.nan
+            out[f"{mode}_c{k+1}_y"]            = c["cy"] if c else np.nan
+            out[f"{mode}_c{k+1}_n_beads"]      = c["n_beads"] if c else 0
+            out[f"{mode}_c{k+1}_umi"]          = c["umi"] if c else 0.0
+            # fraction of the cluster's UMI from its single top bead, and a hot-bead
+            # flag (one bead dominates -> fake cluster, not a real localization)
+            tf = c["topbead_frac"] if c else np.nan
+            out[f"{mode}_c{k+1}_topbead_frac"] = tf
+            out[f"{mode}_c{k+1}_hotbead"]      = bool(np.isfinite(tf) and tf >= PARAMS["hotbead_frac"])
         out[f"{mode}_{rest_tag}_n_beads"]   = int(crest["n_beads"])
         out[f"{mode}_{rest_tag}_umi"]       = float(crest["umi"])
         out[f"{mode}_{rest_tag}_n_clusters"] = int(crest["n_clusters"])
@@ -663,6 +673,9 @@ def main():
                          "prom-curve transition")
     ap.add_argument("--region-spline-s", type=float, default=DEFAULT_REGION_SPLINE_S,
                     help="smoothing-spline s for the prom-curve derivative (<0 → scipy default)")
+    ap.add_argument("--hotbead-frac", type=float, default=DEFAULT_HOTBEAD_FRAC,
+                    help="flag a DBSCAN cluster as a hot-bead (fake) when its single top "
+                         "bead supplies >= this fraction of the cluster UMI")
     ap.add_argument("--ncores", type=int,
                     default=int(os.environ.get("SLURM_CPUS_PER_TASK", str(DEFAULT_NCORES))))
     args = ap.parse_args()
@@ -674,7 +687,7 @@ def main():
                   sigma=args.sigma, grid=args.grid,
                   nprom=args.nprom, radii=list(args.radii),
                   region_min_prom=args.region_min_prom, region_spline_s=args.region_spline_s,
-                  ncores=args.ncores)
+                  hotbead_frac=args.hotbead_frac, ncores=args.ncores)
 
     m = load_cb_bead_table(args.whitelist, args.puck)
     arr = {cb: (g["x_um"].to_numpy(float), g["y_um"].to_numpy(float),
