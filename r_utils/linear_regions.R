@@ -5,12 +5,19 @@
 # data.frame of regions (rank_lo, rank_hi, npts, r2 = mean local R² in the run),
 # or NULL if none. Used to shade the prom-rank panels.
 .linear_regions <- function(prom, space = c("linrank", "logrank"),
-                            win = 11, r2_thr = 0.97, min_len = 8) {
+                            win = 11, r2_thr = 0.97, min_len = 8,
+                            presmooth = TRUE) {
   space <- match.arg(space)
   p <- prom[is.finite(prom) & prom > 0]
   n <- length(p)
   if (n < max(win, min_len)) return(NULL)
   y <- log10(p)
+  # 3-bin [0.25,0.5,0.25] smooth of log10(prom) before the window line fits, so
+  # local R² reflects the curve shape rather than point-to-point jitter.
+  if (presmooth && n >= 3) {
+    padded <- c(y[1], y, y[n])
+    y <- as.numeric(stats::filter(padded, c(0.25, 0.5, 0.25)))[2:(n + 1)]
+  }
   rank <- seq_len(n)
   x <- if (space == "linrank") rank else log10(rank)
 

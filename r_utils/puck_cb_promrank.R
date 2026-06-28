@@ -197,6 +197,9 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
     beta_r2 <- 1 - sum(rb^2) / sum((yv[bg] - mean(yv[bg]))^2)
     madbg <- mad(rb)
     if (is.finite(madbg) && madbg > 0) beta_z1 <- (yv[1] - pred[1]) / madbg
+    # the sorted prominence spectrum is monotone non-increasing in rank, so the
+    # background curve must be too; cummin clips any end uptick (fitted b<=0).
+    pred <- cummin(pred)
     beta_df <- data.frame(rank = rk, log_prom = pred)
   }
   add_beta <- function(g) if (is.null(beta_df)) g else
