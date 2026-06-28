@@ -18,7 +18,8 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
                            show_regions = TRUE, region_min_prom = 0.05,
                            region_top_exclude = 3,
                            show_linregions = TRUE, linreg_win = 11,
-                           linreg_r2 = 0.97, linreg_min_len = 8) {
+                           linreg_r2 = 0.95, linreg_min_len = 8,
+                           show_beta = TRUE, beta_exclude = 3) {
   gamma_model <- match.arg(gamma_model)
   row <- .get_cell_row(profiles_df, cell_id, suffix)
   if (is.null(row)) return(ggplot() + ggtitle(paste0(cell_id, " — not in table")))
@@ -182,6 +183,26 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
   }
   nreg_txt <- function(reg) if (is.null(reg)) "0" else as.character(nrow(reg))
 
+  # Beta order-statistic background fit: log10(prom) ~ log10(rank) + log10(N+1-rank),
+  # fit on the background (ranks > beta_exclude) and predicted over the full range.
+  # Drawn purple; this is the order-statistic background the real peaks sit above.
+  beta_df <- NULL; beta_r2 <- NA_real_; beta_z1 <- NA_real_
+  if (show_beta && length(p) >= 15) {
+    Np <- length(p); rk <- seq_len(Np); rv <- Np + 1 - rk; yv <- log10(p)
+    bg <- rk > beta_exclude
+    X  <- cbind(1, log10(rk), log10(rv))
+    m  <- stats::lm.fit(X[bg, , drop = FALSE], yv[bg])
+    pred <- as.numeric(X %*% m$coefficients)
+    rb <- yv[bg] - pred[bg]
+    beta_r2 <- 1 - sum(rb^2) / sum((yv[bg] - mean(yv[bg]))^2)
+    madbg <- mad(rb)
+    if (is.finite(madbg) && madbg > 0) beta_z1 <- (yv[1] - pred[1]) / madbg
+    beta_df <- data.frame(rank = rk, log_prom = pred)
+  }
+  add_beta <- function(g) if (is.null(beta_df)) g else
+    g + geom_line(data = beta_df, aes(rank, log_prom), colour = "purple",
+                  linewidth = 0.7, linetype = "longdash")
+
   # base scatter for a panel: shaded linear regions (behind) -> gamma proj -> pts
   mk_base <- function(reg) {
     g <- shade(ggplot(d, aes(rank, log_prom)), reg)
@@ -206,27 +227,27 @@ puck_cb_promrank <- function(cell_id, profiles_df, suffix = "-1",
   # 1..zoom_hi (right). The zoom uses its own y-range over the shown ranks.
   zoom_hi <- min(20, max(d$rank))
   yr_zoom <- range(d$log_prom[d$rank <= zoom_hi], na.rm = TRUE)
-  lin_base <- function() add_fit(mk_base(lr_lin_reg), lin_fit, "darkorange2", "dashed") +
+  lin_base <- function() add_fit(add_beta(mk_base(lr_lin_reg)), lin_fit, "darkorange2", "dashed") +
     geom_point(data = pk, aes(rank, log_prom), colour = "firebrick", size = 2.4) +
     labs(y = "log10(prom) [UMI/µm²]", title = NULL) + theme_minimal()
   g_lin_full <- lin_base() +
     coord_cartesian(xlim = xr, ylim = yr) +
     labs(x = "peak rank (linear)",
-         subtitle = sprintf("linear-rank lr fit  %s | fc p1=%.2f p2=%.2f | linregions(green)=%s",
-                            r2txt(lin_fit), lr_lfc_lin[1], lr_lfc_lin[2], nreg_txt(lr_lin_reg)))
+         subtitle = sprintf("lin-rank lr %s | beta-OS(purple) R²=%.3f z1=%.1f | linregions=%s",
+                            r2txt(lin_fit), beta_r2, beta_z1, nreg_txt(lr_lin_reg)))
   g_lin_zoom <- lin_base() +
     coord_cartesian(xlim = c(1, zoom_hi), ylim = yr_zoom) +
     labs(x = "peak rank (linear)", y = NULL,
          subtitle = sprintf("zoom: peaks 1-%d", zoom_hi))
   g_lin_rank <- g_lin_full | g_lin_zoom
 
-  g_log_rank <- add_fit(mk_base(lr_log_reg), log_fit, "steelblue", "dotted") +
+  g_log_rank <- add_fit(add_beta(mk_base(lr_log_reg)), log_fit, "steelblue", "dotted") +
     geom_point(data = pk, aes(rank, log_prom), colour = "firebrick", size = 2.4) +
     scale_x_log10() +
     coord_cartesian(xlim = xr, ylim = yr) +
     labs(x = "peak rank (log)", y = "log10(prom) [UMI/µm²]", title = NULL,
-         subtitle = sprintf("log-rank lr fit  %s | fc p1=%.2f p2=%.2f | linregions(green)=%s",
-                            r2txt(log_fit), lr_lfc_log[1], lr_lfc_log[2], nreg_txt(lr_log_reg))) +
+         subtitle = sprintf("log-rank lr %s | beta-OS(purple) R²=%.3f z1=%.1f | linregions=%s",
+                            r2txt(log_fit), beta_r2, beta_z1, nreg_txt(lr_log_reg))) +
     theme_minimal()
   main_panels <- list(g_lin_rank, g_log_rank)
 
